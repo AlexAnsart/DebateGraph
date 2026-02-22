@@ -1,0 +1,33 @@
+# ─── Core Framework ─────────────────────────────────────────
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+python-dotenv==1.0.1
+pydantic==2.9.0
+
+# ─── Audio Processing ───────────────────────────────────────
+# WhisperX bundles faster-whisper + pyannote diarization
+# Install separately if GPU/CUDA issues:
+#   pip install faster-whisper
+#   pip install pyannote.audio
+whisperx @ git+https://github.com/m-bain/whisperX.git
+
+# ─── LLM ────────────────────────────────────────────────────
+anthropic==0.34.0
+
+# ─── Graph ──────────────────────────────────────────────────
+networkx==3.3
+
+# ─── Message Broker ─────────────────────────────────────────
+redis==5.0.8
+
+# ─── Utilities ──────────────────────────────────────────────
+aiofiles==24.1.0
+ffmpeg-python==0.2.0
+numpy==1.26.4
+
+# ─── Fact-checking (Phase 2) ────────────────────────────────
+# tavily-python==0.4.0
+
+# ─── NLP utilities ──────────────────────────────────────────
+sentence-transformers==3.0.1

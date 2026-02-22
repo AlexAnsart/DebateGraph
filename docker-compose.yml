@@ -1,0 +1,44 @@
+version: "3.9"
+
+services:
+  # ─── Backend (FastAPI) ─────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    volumes:
+      - ./backend:/app
+      - uploads:/app/uploads
+    depends_on:
+      - redis
+    restart: unless-stopped
+
+  # ─── Frontend (Vite dev / Nginx prod) ─────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend/src:/app/src
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  # ─── Redis (message broker for WebSocket pub/sub) ─────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    restart: unless-stopped
+
+volumes:
+  uploads:
+  redis-data:
