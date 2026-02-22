@@ -105,6 +105,42 @@ async def run_demo():
     })
 
 
+# ─── Snapshot Endpoint ──────────────────────────────────────
+
+@app.get("/api/snapshot/latest")
+async def get_latest_snapshot():
+    """
+    Return the latest pre-computed analysis snapshot (if available).
+    Looks for logs/e2e_test_snapshot.json first, then any session snapshot.
+    Useful for loading results without re-running the pipeline.
+    """
+    import json
+
+    # Check for e2e test snapshot
+    snapshot_paths = [
+        Path("..") / "logs" / "e2e_test_snapshot.json",
+        Path("logs") / "e2e_test_snapshot.json",
+    ]
+
+    for snapshot_path in snapshot_paths:
+        if snapshot_path.exists():
+            try:
+                with open(snapshot_path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                return JSONResponse(content={
+                    "status": "complete",
+                    "graph": data,
+                    "source": str(snapshot_path),
+                })
+            except Exception as e:
+                logger.error(f"Failed to load snapshot from {snapshot_path}: {e}")
+
+    return JSONResponse(
+        status_code=404,
+        content={"status": "not_found", "message": "No pre-computed snapshot available. Upload a file or run the demo."},
+    )
+
+
 # ─── Health Check ────────────────────────────────────────────
 
 @app.get("/api/health")

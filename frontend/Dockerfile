@@ -1,15 +1,28 @@
-FROM node:20-alpine
+FROM node:20-alpine AS build
 
 WORKDIR /app
 
-# Install dependencies
+# Copy package files first for better caching
 COPY package.json package-lock.json* ./
 RUN npm install
 
-# Copy source
+# Copy source code
 COPY . .
 
-EXPOSE 5173
+# Build for production
+RUN npm run build
 
-# Dev mode with hot reload
-CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+# ─── Production stage ────────────────────────────────────────
+FROM node:20-alpine AS production
+
+WORKDIR /app
+
+# Install a simple static file server
+RUN npm install -g serve
+
+# Copy built files from build stage
+COPY --from=build /app/dist ./dist
+
+EXPOSE 3000
+
+CMD ["serve", "-s", "dist", "-l", "3000"]

@@ -366,20 +366,54 @@ class OntologicalAgent:
         return "\n".join(lines)
 
     def _extract_json(self, text: str) -> str:
-        """Extract JSON from LLM response, handling markdown code blocks."""
+        """Extract JSON from LLM response, handling markdown code blocks robustly."""
+        # Try ```json ... ``` blocks first
         if "```json" in text:
             start = text.index("```json") + 7
-            end = text.index("```", start)
-            return text[start:end].strip()
+            # Find closing ``` — if not found, take everything after the opening
+            closing = text.find("```", start)
+            if closing != -1:
+                return text[start:closing].strip()
+            else:
+                # No closing backticks — take rest of text and try to find JSON
+                remaining = text[start:].strip()
+                return self._find_json_object(remaining)
         elif "```" in text:
             start = text.index("```") + 3
-            end = text.index("```", start)
-            return text[start:end].strip()
+            # Skip optional language identifier on same line
+            newline = text.find("\n", start)
+            if newline != -1 and newline - start < 20:
+                start = newline + 1
+            closing = text.find("```", start)
+            if closing != -1:
+                return text[start:closing].strip()
+            else:
+                remaining = text[start:].strip()
+                return self._find_json_object(remaining)
 
-        # Find raw JSON object
+        # No code blocks — find raw JSON object
+        return self._find_json_object(text)
+
+    def _find_json_object(self, text: str) -> str:
+        """Find the first complete JSON object in text using brace matching."""
         depth = 0
         start_idx = None
+        in_string = False
+        escape_next = False
+
         for i, char in enumerate(text):
+            if escape_next:
+                escape_next = False
+                continue
+            if char == '\\' and in_string:
+                escape_next = True
+                continue
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+
             if char == "{":
                 if depth == 0:
                     start_idx = i
@@ -388,5 +422,9 @@ class OntologicalAgent:
                 depth -= 1
                 if depth == 0 and start_idx is not None:
                     return text[start_idx:i + 1]
+
+        # If we found an opening brace but no matching close, return from start to end
+        if start_idx is not None:
+            return text[start_idx:]
 
         return text

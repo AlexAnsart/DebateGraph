@@ -254,19 +254,49 @@ class ResearcherAgent:
         )
 
     def _extract_json(self, text: str) -> str:
-        """Extract JSON from LLM response."""
+        """Extract JSON from LLM response, handling markdown code blocks robustly."""
         if "```json" in text:
             start = text.index("```json") + 7
-            end = text.index("```", start)
-            return text[start:end].strip()
+            closing = text.find("```", start)
+            if closing != -1:
+                return text[start:closing].strip()
+            else:
+                remaining = text[start:].strip()
+                return self._find_json_object(remaining)
         elif "```" in text:
             start = text.index("```") + 3
-            end = text.index("```", start)
-            return text[start:end].strip()
+            newline = text.find("\n", start)
+            if newline != -1 and newline - start < 20:
+                start = newline + 1
+            closing = text.find("```", start)
+            if closing != -1:
+                return text[start:closing].strip()
+            else:
+                remaining = text[start:].strip()
+                return self._find_json_object(remaining)
 
+        return self._find_json_object(text)
+
+    def _find_json_object(self, text: str) -> str:
+        """Find the first complete JSON object in text using brace matching."""
         depth = 0
         start_idx = None
+        in_string = False
+        escape_next = False
+
         for i, char in enumerate(text):
+            if escape_next:
+                escape_next = False
+                continue
+            if char == '\\' and in_string:
+                escape_next = True
+                continue
+            if char == '"' and not escape_next:
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
+
             if char == "{":
                 if depth == 0:
                     start_idx = i
@@ -275,5 +305,8 @@ class ResearcherAgent:
                 depth -= 1
                 if depth == 0 and start_idx is not None:
                     return text[start_idx:i + 1]
+
+        if start_idx is not None:
+            return text[start_idx:]
 
         return text

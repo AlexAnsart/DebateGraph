@@ -66,6 +66,20 @@ export async function runDemo(): Promise<DemoResponse> {
 }
 
 /**
+ * Load the latest pre-computed snapshot (from a previous analysis run).
+ */
+export async function loadLatestSnapshot(): Promise<DemoResponse> {
+  const response = await fetch(`${BASE_URL}/snapshot/latest`);
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error("No pre-computed snapshot available. Upload a file or run the demo first.");
+    }
+    throw new Error("Failed to load snapshot");
+  }
+  return response.json();
+}
+
+/**
  * Check backend health.
  */
 export async function checkHealth(): Promise<HealthResponse> {

@@ -3,6 +3,7 @@ import React, { useState, useRef } from "react";
 interface UploadPanelProps {
   onUpload: (file: File) => void;
   onDemo: () => void;
+  onLoadLatest?: () => void;
   isLoading: boolean;
 }
 
@@ -22,7 +23,7 @@ const ACCEPTED_FORMATS = [
  * Upload panel for audio/video files with drag-and-drop support.
  * Also provides a "Run Demo" button for testing without a file.
  */
-export default function UploadPanel({ onUpload, onDemo, isLoading }: UploadPanelProps) {
+export default function UploadPanel({ onUpload, onDemo, onLoadLatest, isLoading }: UploadPanelProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -190,6 +191,23 @@ export default function UploadPanel({ onUpload, onDemo, isLoading }: UploadPanel
           ⚡ Demo
         </button>
       </div>
+
+      {/* Load Latest Snapshot */}
+      {onLoadLatest && (
+        <button
+          onClick={onLoadLatest}
+          disabled={isLoading}
+          className={`
+            w-full py-2 px-4 rounded-lg font-medium text-sm transition-all
+            ${isLoading
+              ? "bg-gray-800 text-gray-500 cursor-not-allowed"
+              : "bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-400 border border-emerald-900/50"
+            }
+          `}
+        >
+          📊 Load Latest Analysis
+        </button>
+      )}
     </div>
   );
 }

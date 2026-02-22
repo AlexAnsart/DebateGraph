@@ -10,35 +10,41 @@ services:
       - "8000:8000"
     env_file:
       - .env
+    environment:
+      - BACKEND_HOST=0.0.0.0
+      - BACKEND_PORT=8000
+      - CORS_ORIGINS=http://localhost:5173,http://localhost:3000
+      - REDIS_URL=redis://redis:6379
     volumes:
-      - ./backend:/app
+      - ./logs:/app/logs
+      - ./demos:/app/demos
       - uploads:/app/uploads
     depends_on:
       - redis
     restart: unless-stopped
 
-  # ─── Frontend (Vite dev / Nginx prod) ─────────────────────
+  # ─── Frontend (React + Vite) ───────────────────────────────
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
     ports:
-      - "5173:5173"
-    volumes:
-      - ./frontend/src:/app/src
+      - "3000:3000"
+    environment:
+      - VITE_API_URL=http://localhost:8000
     depends_on:
       - backend
     restart: unless-stopped
 
-  # ─── Redis (message broker for WebSocket pub/sub) ─────────
+  # ─── Redis (message broker for future real-time features) ──
   redis:
     image: redis:7-alpine
     ports:
       - "6379:6379"
     volumes:
-      - redis-data:/data
+      - redis_data:/data
     restart: unless-stopped
 
 volumes:
   uploads:
-  redis-data:
+  redis_data:

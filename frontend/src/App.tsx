@@ -5,7 +5,7 @@ import type {
   SelectedNode,
   FallacyAnnotation,
 } from "./types";
-import { uploadFile, runDemo } from "./api";
+import { uploadFile, runDemo, loadLatestSnapshot } from "./api";
 import GraphView from "./components/GraphView";
 import WaveformView from "./components/WaveformView";
 import FallacyPanel from "./components/FallacyPanel";
@@ -99,9 +99,28 @@ export default function App() {
     try {
       const result = await runDemo();
       setGraph(result.graph);
-      setTranscription(result.transcription);
+      if (result.transcription) setTranscription(result.transcription);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Demo failed");
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  const handleLoadLatest = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    setGraph(null);
+    setTranscription(null);
+    setSelectedNode(null);
+    setAudioUrl(null);
+
+    try {
+      const result = await loadLatestSnapshot();
+      setGraph(result.graph);
+      if (result.transcription) setTranscription(result.transcription);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load snapshot");
     } finally {
       setIsLoading(false);
     }
@@ -158,6 +177,7 @@ export default function App() {
           <UploadPanel
             onUpload={handleUpload}
             onDemo={handleDemo}
+            onLoadLatest={handleLoadLatest}
             isLoading={isLoading}
           />
 

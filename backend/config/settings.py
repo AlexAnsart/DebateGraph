@@ -11,10 +11,10 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
 # ─── LLM Model Configuration ────────────────────────────────────────────────
 
 # Primary model for fast analysis (claim extraction, fallacy detection)
-LLM_MODEL = os.getenv("LLM_MODEL", "claude-haiku-4-5")
+LLM_MODEL = os.getenv("LLM_MODEL", "claude-3-haiku-20240307")
 
 # Fallback model if primary fails
-LLM_MODEL_FALLBACK = os.getenv("LLM_MODEL_FALLBACK", "claude-sonnet-4-5")
+LLM_MODEL_FALLBACK = os.getenv("LLM_MODEL_FALLBACK", "claude-haiku-4-5")
 
 # Max tokens for different tasks
 LLM_MAX_TOKENS_EXTRACTION = int(os.getenv("LLM_MAX_TOKENS_EXTRACTION", "4096"))
@@ -35,8 +35,17 @@ MAX_CONCURRENT_LLM_CALLS = int(os.getenv("MAX_CONCURRENT_LLM_CALLS", "3"))
 # Strawman similarity threshold
 STRAWMAN_SIMILARITY_THRESHOLD = float(os.getenv("STRAWMAN_SIMILARITY_THRESHOLD", "0.75"))
 
-# ─── Whisper Configuration ───────────────────────────────────────────────────
+# ─── Speech-to-Text Configuration (OpenAI API) ──────────────────────────────
 
+# Model: gpt-4o-transcribe-diarize (best: transcription + speaker diarization)
+#        gpt-4o-transcribe (fallback: transcription only, no diarization)
+#        gpt-4o-mini-transcribe (cheapest: transcription only)
+STT_MODEL = os.getenv("STT_MODEL", "gpt-4o-transcribe-diarize")
+
+# Optional prompt to improve transcription quality (context about the audio)
+STT_PROMPT = os.getenv("STT_PROMPT", "This is a political debate between two candidates discussing policy issues.")
+
+# Legacy Whisper config (kept for local WhisperX fallback if needed)
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "medium")
 WHISPER_DEVICE = os.getenv("WHISPER_DEVICE", "auto")
 WHISPER_COMPUTE_TYPE = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
