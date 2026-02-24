@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useCallback } from "react";
+import React, { useRef, useEffect, useCallback, useMemo } from "react";
 import cytoscape, { type Core, type EventObject } from "cytoscape";
 import type { GraphSnapshot, GraphNode, EdgeType, SelectedNode } from "../types";
 import { EDGE_COLORS, SPEAKER_COLORS } from "../types";
@@ -8,6 +8,36 @@ interface GraphViewProps {
   onNodeSelect: (selected: SelectedNode | null) => void;
   highlightTimestamp?: number | null;
 }
+
+// Get color based on claim type (defined outside component to avoid closure issues)
+const getClaimTypeColor = (claimType: string): string => {
+  switch (claimType) {
+    case "conclusion":
+      return "#f59e0b";
+    case "rebuttal":
+      return "#ef4444";
+    case "concession":
+      return "#10b981";
+    case "premise":
+      return "#3b82f6";
+    default:
+      return "#6b7280";
+  }
+};
+
+// Get node shape based on claim type
+const getNodeShape = (claimType: string): string => {
+  switch (claimType) {
+    case "conclusion":
+      return "diamond";
+    case "rebuttal":
+      return "triangle";
+    case "concession":
+      return "round-rectangle";
+    default:
+      return "ellipse";
+  }
+};
 
 /**
  * Interactive argument graph visualization using Cytoscape.js.
@@ -33,22 +63,8 @@ export default function GraphView({
     [graph]
   );
 
-  // Get node shape based on claim type
-  const getNodeShape = (claimType: string): string => {
-    switch (claimType) {
-      case "conclusion":
-        return "diamond";
-      case "rebuttal":
-        return "triangle";
-      case "concession":
-        return "round-rectangle";
-      default:
-        return "ellipse";
-    }
-  };
-
   // Get border style for fallacies
-  const getNodeBorder = (node: GraphNode) => {
+  const getNodeBorder = useCallback((node: GraphNode) => {
     if (node.fallacies.length > 0) {
       return { borderWidth: 3, borderColor: "#ef4444" };
     }
@@ -59,7 +75,7 @@ export default function GraphView({
       return { borderWidth: 2, borderColor: "#22c55e" };
     }
     return { borderWidth: 1, borderColor: "#374151" };
-  };
+  }, []);
 
   // Initialize Cytoscape
   useEffect(() => {
@@ -137,6 +153,7 @@ export default function GraphView({
         node: {
           id: nodeData.id,
           label: nodeData.fullLabel,
+          full_text: nodeData.fullText,
           speaker: nodeData.speaker,
           claim_type: nodeData.claimType,
           timestamp_start: nodeData.timestampStart,
@@ -158,12 +175,77 @@ export default function GraphView({
       }
     });
 
+    // Tooltip on hover — show full text in a custom floating tooltip
+    cy.on("mouseover", "node", (evt: EventObject) => {
+      const nodeData = evt.target.data();
+      const fullText = nodeData.fullText || nodeData.fullLabel || "";
+      const speaker = (nodeData.speaker || "").replace("SPEAKER_", "Speaker ");
+      const ts = `${(nodeData.timestampStart || 0).toFixed(1)}s`;
+      const type = nodeData.claimType || "premise";
+      const speakerColor = getSpeakerColor(nodeData.speaker);
+      const typeColor = getClaimTypeColor(type);
+      
+      // Find or create tooltip
+      let tooltip = document.getElementById("graph-tooltip");
+      if (!tooltip) {
+        tooltip = document.createElement("div");
+        tooltip.id = "graph-tooltip";
+        tooltip.className = "fixed z-50 bg-gray-900 border border-gray-700 rounded-lg shadow-xl p-3 pointer-events-none";
+        tooltip.style.display = "none";
+        document.body.appendChild(tooltip);
+      }
+      
+      tooltip.innerHTML = `
+        <div class="text-xs font-semibold mb-1" style="color: ${speakerColor}">
+          ${speaker} <span class="text-gray-500">@ ${ts}</span>
+        </div>
+        <div class="text-xs px-2 py-1 rounded inline-block mb-2" style="background-color: ${typeColor}22; color: ${typeColor}">
+          ${type}
+        </div>
+        <div class="text-sm max-w-xs whitespace-pre-wrap text-gray-200">${fullText}</div>
+      `;
+      tooltip.style.display = "block";
+      
+      // Position tooltip near the node
+      const pos = evt.target.renderedPosition();
+      const containerRect = containerRef.current?.getBoundingClientRect();
+      if (containerRect) {
+        tooltip.style.left = `${containerRect.left + pos.x + 20}px`;
+        tooltip.style.top = `${containerRect.top + pos.y - 10}px`;
+      }
+    });
+
+    cy.on("mouseout", "node", () => {
+      const tooltip = document.getElementById("graph-tooltip");
+      if (tooltip) {
+        tooltip.style.display = "none";
+      }
+    });
+    
+    // Move tooltip with mouse over nodes
+    cy.on("mousemove", "node", (evt: EventObject) => {
+      const tooltip = document.getElementById("graph-tooltip");
+      if (tooltip && tooltip.style.display !== "none") {
+        const pos = evt.target.renderedPosition();
+        const containerRect = containerRef.current?.getBoundingClientRect();
+        if (containerRect) {
+          tooltip.style.left = `${containerRect.left + pos.x + 20}px`;
+          tooltip.style.top = `${containerRect.top + pos.y - 10}px`;
+        }
+      }
+    });
+
     cyRef.current = cy;
 
     return () => {
+      // Cleanup tooltip
+      const tooltip = document.getElementById("graph-tooltip");
+      if (tooltip) {
+        tooltip.remove();
+      }
       cy.destroy();
     };
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [onNodeSelect, getSpeakerColor]);
 
   // Update graph data
   useEffect(() => {
@@ -188,6 +270,7 @@ export default function GraphView({
           id: node.id,
           label: truncatedLabel,
           fullLabel: node.label,
+          fullText: node.full_text || node.label,
           speaker: node.speaker,
           claimType: node.claim_type,
           timestampStart: node.timestamp_start,
@@ -237,7 +320,7 @@ export default function GraphView({
       gravity: 0.3,
       padding: 50,
     } as any).run();
-  }, [graph, getSpeakerColor]);
+  }, [graph, getSpeakerColor, getNodeBorder]);
 
   // Highlight node at current audio timestamp
   useEffect(() => {

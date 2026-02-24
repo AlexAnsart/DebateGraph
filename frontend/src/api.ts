@@ -91,14 +91,48 @@ export async function checkHealth(): Promise<HealthResponse> {
 }
 
 /**
- * List all jobs.
+ * Job metadata returned by GET /api/jobs
  */
-export async function listJobs(): Promise<
-  { job_id: string; status: string; progress: number }[]
-> {
+export interface JobMeta {
+  id: string;
+  status: string;
+  created_at: string;
+  audio_filename: string | null;
+  duration_s: number | null;
+  progress: number;
+  error: string | null;
+  num_nodes: number | null;
+  num_edges: number | null;
+  num_fallacies: number | null;
+  num_factchecks: number | null;
+  speakers: string[] | null;
+}
+
+/**
+ * List all jobs with metadata (from PostgreSQL).
+ */
+export async function listJobs(): Promise<JobMeta[]> {
   const response = await fetch(`${BASE_URL}/jobs`);
   if (!response.ok) {
     throw new Error("Failed to list jobs");
+  }
+  return response.json();
+}
+
+/**
+ * Load a specific graph snapshot from the database by job ID.
+ */
+export async function loadSnapshot(jobId: string): Promise<DemoResponse & { job_id: string; audio_filename?: string }> {
+  const response = await fetch(`${BASE_URL}/snapshot/${jobId}`);
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error("Snapshot not found in database.");
+    }
+    if (response.status === 400) {
+      const err = await response.json().catch(() => ({}));
+      throw new Error(err.detail || "Job not complete yet.");
+    }
+    throw new Error("Failed to load snapshot");
   }
   return response.json();
 }

@@ -1,25 +1,22 @@
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useRef } from "react";
 import type {
   GraphSnapshot,
   TranscriptionResult,
   SelectedNode,
   FallacyAnnotation,
 } from "./types";
-import { uploadFile, runDemo, loadLatestSnapshot } from "./api";
+import { uploadFile, runDemo, loadSnapshot } from "./api";
 import GraphView from "./components/GraphView";
 import WaveformView from "./components/WaveformView";
 import FallacyPanel from "./components/FallacyPanel";
 import RigorScore from "./components/RigorScore";
 import NodeDetail from "./components/NodeDetail";
 import UploadPanel from "./components/UploadPanel";
+import { useLiveStream } from "./hooks/useLiveStream";
+import { useAudioCapture } from "./hooks/useAudioCapture";
 
-/**
- * Main application component.
- * Layout: Left sidebar (upload + controls) | Center (graph) | Right sidebar (analysis)
- * Bottom: Waveform + transcript
- */
 export default function App() {
-  // ─── State ──────────────────────────────────────────────
+  // ── State ──────────────────────────────────────────────────────────────────
   const [graph, setGraph] = useState<GraphSnapshot | null>(null);
   const [transcription, setTranscription] = useState<TranscriptionResult | null>(null);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -27,14 +24,45 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState<number>(0);
+  const [mode, setMode] = useState<"idle" | "upload" | "live">("idle");
 
-  // ─── Derived Data ───────────────────────────────────────
+  // ── Live streaming ─────────────────────────────────────────────────────────
+  const liveStream = useLiveStream({
+    enableFactcheck: true,
+    enableLlmFallacy: true,
+    onGraphUpdate: useCallback((g: GraphSnapshot, t: TranscriptionResult | null) => {
+      setGraph(g);
+      if (t) setTranscription(t);
+    }, []),
+    onError: useCallback((err: string) => {
+      setError(err);
+    }, []),
+  });
+
+  const chunkIndexRef = useRef(0);
+
+  const audioCapture = useAudioCapture({
+    chunkDurationMs: 15000, // 15s chunks
+    onChunk: useCallback(
+      (chunk: ArrayBuffer, chunkIndex: number, timeOffset: number) => {
+        liveStream.sendChunk(chunk, chunkIndex, timeOffset);
+      },
+      [liveStream.sendChunk]
+    ),
+    onError: useCallback((err: string) => {
+      setError(err);
+    }, []),
+  });
+
+  // ── Derived data ───────────────────────────────────────────────────────────
   const allFallacies = useMemo<FallacyAnnotation[]>(() => {
     if (!graph) return [];
     return graph.nodes.flatMap((n) => n.fallacies);
   }, [graph]);
 
-  // ─── Handlers ───────────────────────────────────────────
+  const isLive = mode === "live" && audioCapture.state.isRecording;
+
+  // ── Handlers ───────────────────────────────────────────────────────────────
 
   const handleUpload = useCallback(async (file: File) => {
     setIsLoading(true);
@@ -42,17 +70,16 @@ export default function App() {
     setGraph(null);
     setTranscription(null);
     setSelectedNode(null);
+    setMode("upload");
 
     try {
-      // Create a local URL for the audio waveform
       const url = URL.createObjectURL(file);
       setAudioUrl(url);
 
       const response = await uploadFile(file);
 
-      // Poll for status
       const pollStatus = async (jobId: string) => {
-        const maxAttempts = 120; // 2 minutes max
+        const maxAttempts = 180; // 3 minutes max
         for (let i = 0; i < maxAttempts; i++) {
           await new Promise((r) => setTimeout(r, 1000));
           try {
@@ -61,16 +88,16 @@ export default function App() {
 
             if (status.status === "complete" && status.graph) {
               setGraph(status.graph);
-              if (status.transcription) {
-                setTranscription(status.transcription);
-              }
+              if (status.transcription) setTranscription(status.transcription);
               setIsLoading(false);
+              setMode("idle");
               return;
             }
 
             if (status.status === "error") {
               setError(status.error || "Analysis failed");
               setIsLoading(false);
+              setMode("idle");
               return;
             }
           } catch {
@@ -79,12 +106,14 @@ export default function App() {
         }
         setError("Analysis timed out");
         setIsLoading(false);
+        setMode("idle");
       };
 
       pollStatus(response.job_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Upload failed");
       setIsLoading(false);
+      setMode("idle");
     }
   }, []);
 
@@ -95,6 +124,7 @@ export default function App() {
     setTranscription(null);
     setSelectedNode(null);
     setAudioUrl(null);
+    setMode("upload");
 
     try {
       const result = await runDemo();
@@ -104,10 +134,11 @@ export default function App() {
       setError(err instanceof Error ? err.message : "Demo failed");
     } finally {
       setIsLoading(false);
+      setMode("idle");
     }
   }, []);
 
-  const handleLoadLatest = useCallback(async () => {
+  const handleLoadSnapshot = useCallback(async (jobId: string) => {
     setIsLoading(true);
     setError(null);
     setGraph(null);
@@ -116,15 +147,45 @@ export default function App() {
     setAudioUrl(null);
 
     try {
-      const result = await loadLatestSnapshot();
+      const result = await loadSnapshot(jobId);
       setGraph(result.graph);
       if (result.transcription) setTranscription(result.transcription);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load snapshot");
+      setError(err instanceof Error ? err.message : "Failed to load snapshot from DB");
     } finally {
       setIsLoading(false);
     }
   }, []);
+
+  const handleStartLive = useCallback(async () => {
+    setError(null);
+    setGraph(null);
+    setTranscription(null);
+    setSelectedNode(null);
+    setAudioUrl(null);
+    setMode("live");
+    liveStream.reset();
+    chunkIndexRef.current = 0;
+
+    try {
+      // Connect WebSocket first
+      await liveStream.connect();
+      // Then start microphone capture
+      await audioCapture.start();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to start live stream";
+      setError(msg);
+      setMode("idle");
+    }
+  }, [liveStream, audioCapture]);
+
+  const handleStopLive = useCallback(async () => {
+    // Stop microphone (emits final chunk)
+    await audioCapture.stop();
+    // Signal backend to finalize
+    liveStream.stop();
+    setMode("idle");
+  }, [audioCapture, liveStream]);
 
   const handleNodeSelect = useCallback((selected: SelectedNode | null) => {
     setSelectedNode(selected);
@@ -138,15 +199,34 @@ export default function App() {
     if (!graph) return;
     const node = graph.nodes.find((n) => n.id === claimId);
     if (node) {
-      setSelectedNode({
-        node,
-        position: { x: 0, y: 0 },
-      });
+      setSelectedNode({ node, position: { x: 0, y: 0 } });
     }
   }, [graph]);
 
-  // ─── Render ─────────────────────────────────────────────
+  // ── Live stats for UploadPanel ─────────────────────────────────────────────
+  const liveStats = useMemo(() => ({
+    nodes: liveStream.state.nodeCount,
+    chunks: liveStream.state.chunkCount,
+    duration: audioCapture.state.duration,
+    audioLevel: audioCapture.state.audioLevel,
+  }), [liveStream.state, audioCapture.state]);
 
+  // ── Status bar text ────────────────────────────────────────────────────────
+  const statusText = useMemo(() => {
+    if (mode === "live") {
+      const s = liveStream.state.status;
+      if (s === "connecting") return "Connecting…";
+      if (s === "recording") return `Recording — ${liveStats.nodes} nodes`;
+      if (s === "processing") return "Processing chunk…";
+      if (s === "finalizing") return "Finalizing…";
+      if (s === "complete") return "Stream complete";
+    }
+    if (isLoading) return "Analyzing…";
+    if (graph) return `${graph.nodes.length} claims · ${graph.edges.length} relations · ${allFallacies.length} fallacies`;
+    return null;
+  }, [mode, liveStream.state.status, liveStats.nodes, isLoading, graph, allFallacies.length]);
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="h-screen flex flex-col overflow-hidden">
       {/* Header */}
@@ -155,17 +235,18 @@ export default function App() {
           <h1 className="text-lg font-bold text-white tracking-tight">
             <span className="text-blue-400">Debate</span>Graph
           </h1>
-          <span className="text-xs text-gray-600 font-mono">v0.2</span>
+          <span className="text-xs text-gray-600 font-mono">v0.3</span>
+          {mode === "live" && (
+            <span className="flex items-center gap-1.5 px-2 py-0.5 bg-red-900/30 border border-red-800 rounded-full text-xs text-red-400">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+              LIVE
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-4">
-          {/* Stats */}
-          {graph && (
-            <div className="flex items-center gap-3 text-xs text-gray-500">
-              <span>{graph.nodes.length} claims</span>
-              <span>{graph.edges.length} relations</span>
-              <span>{allFallacies.length} fallacies</span>
-            </div>
+          {statusText && (
+            <span className="text-xs text-gray-400">{statusText}</span>
           )}
         </div>
       </header>
@@ -177,18 +258,20 @@ export default function App() {
           <UploadPanel
             onUpload={handleUpload}
             onDemo={handleDemo}
-            onLoadLatest={handleLoadLatest}
+            onLoadSnapshot={handleLoadSnapshot}
+            onStartLive={handleStartLive}
+            onStopLive={handleStopLive}
             isLoading={isLoading}
+            isLive={isLive}
+            liveStats={liveStats}
           />
 
-          {/* Error display */}
           {error && (
             <div className="mt-4 bg-red-950/30 border border-red-900/50 rounded-lg p-3 text-sm text-red-300">
               <span className="font-medium">Error:</span> {error}
             </div>
           )}
 
-          {/* Loading indicator */}
           {isLoading && (
             <div className="mt-4 text-center py-8">
               <svg className="animate-spin w-8 h-8 mx-auto text-blue-400 mb-3" viewBox="0 0 24 24">
@@ -202,7 +285,6 @@ export default function App() {
             </div>
           )}
 
-          {/* Rigor Scores */}
           {graph && graph.rigor_scores.length > 0 && (
             <div className="mt-4">
               <RigorScore scores={graph.rigor_scores} />
@@ -219,13 +301,30 @@ export default function App() {
               highlightTimestamp={currentTime}
             />
 
-            {/* Node Detail Overlay */}
             {selectedNode && (
-              <div className="absolute top-4 right-4 w-80 z-10">
+              <div className="absolute top-4 right-4 w-96 z-10 max-h-[calc(100vh-200px)]">
                 <NodeDetail
                   selected={selectedNode}
                   onClose={() => setSelectedNode(null)}
                 />
+              </div>
+            )}
+
+            {/* Live overlay — shows when recording but no graph yet */}
+            {mode === "live" && !graph && (
+              <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                <div className="text-center">
+                  <div className="w-16 h-16 rounded-full bg-red-900/20 border-2 border-red-700 flex items-center justify-center mx-auto mb-4 animate-pulse">
+                    <svg className="w-8 h-8 text-red-400" fill="currentColor" viewBox="0 0 24 24">
+                      <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                      <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                    </svg>
+                  </div>
+                  <p className="text-gray-400 text-sm">Listening…</p>
+                  <p className="text-gray-600 text-xs mt-1">
+                    Graph will appear after the first 15s chunk
+                  </p>
+                </div>
               </div>
             )}
           </div>
@@ -247,7 +346,6 @@ export default function App() {
             onClaimClick={handleClaimClick}
           />
 
-          {/* Cycles detected */}
           {graph && graph.cycles_detected.length > 0 && (
             <div className="mt-4 bg-purple-950/20 border border-purple-900/30 rounded-lg p-4">
               <h3 className="text-xs font-semibold text-purple-400 uppercase tracking-wider mb-2">

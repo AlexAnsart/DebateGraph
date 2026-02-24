@@ -72,6 +72,8 @@ TRANSCRIPTION:
 
 Extract every distinct claim and identify relationships between them.
 
+IMPORTANT: Skip any segment that is just a single word, filler ("uh", "um", "okay", "yeah", "oh"), or incomplete fragment with no argumentative content.
+
 Respond with ONLY valid JSON (no markdown, no explanation) in this exact format:
 {{
   "claims": [
@@ -96,27 +98,30 @@ Respond with ONLY valid JSON (no markdown, no explanation) in this exact format:
   ]
 }}
 
-CLAIM TYPES:
+CLAIM TYPES (use EXACTLY one of these values):
 - "premise": provides evidence, data, or reasoning to support another claim
 - "conclusion": the main point being argued or defended
 - "concession": acknowledges the opponent's point has merit
 - "rebuttal": directly counters or refutes an opponent's claim
 
-RELATION TYPES:
+RELATION TYPES (use EXACTLY one of these values):
 - "support": source provides evidence/reasoning for target
 - "attack": source contradicts or argues against target
 - "undercut": source challenges the logical link between premises and conclusion (not the claim itself)
 - "reformulation": both claims express the same idea differently
 - "implication": source logically implies target
 
-RULES:
+CRITICAL RULES:
+- relation_type MUST be one of: "support", "attack", "undercut", "reformulation", "implication" — NEVER use claim types as relation types
+- claim_type MUST be one of: "premise", "conclusion", "concession", "rebuttal" — NEVER use relation types as claim types
 - Extract ALL distinct claims — multiple claims can come from one segment
 - One claim per atomic argument (don't merge separate points)
 - Be precise with timestamps — use the segment boundaries
 - Confidence reflects certainty about the relation (0.0-1.0)
 - Mark claims as is_factual=true if they contain verifiable statistics, dates, studies, or specific data
 - Every claim MUST have a valid claim_type
-- Every relation MUST reference existing claim IDs"""
+- Every relation MUST reference existing claim IDs
+- Do NOT extract single-word utterances, filler words, or incomplete fragments as claims"""
 
 SKEPTIC_SYSTEM_PROMPT = """You are an expert in informal logic, critical thinking, and argumentation theory. Your role is to identify logical fallacies in debate arguments with precision and fairness.
 

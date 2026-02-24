@@ -44,10 +44,23 @@ async def lifespan(app: FastAPI):
     logger.info(f"  WHISPER_DEVICE: {WHISPER_DEVICE}")
     logger.info(f"  ANTHROPIC_API:  {'configured' if os.getenv('ANTHROPIC_API_KEY') else 'not set (demo mode)'}")
     logger.info(f"  TAVILY_API:     {'configured' if os.getenv('TAVILY_API_KEY') else 'not set (mock fact-check)'}")
+    logger.info(f"  DATABASE_URL:   {'configured' if os.getenv('DATABASE_URL') else 'not set (no persistence)'}")
     logger.info("=" * 60)
 
     # Ensure upload directory exists
     Path("uploads").mkdir(parents=True, exist_ok=True)
+
+    # Initialize PostgreSQL tables
+    if os.getenv("DATABASE_URL"):
+        try:
+            from db.database import init_db
+            init_db()
+            logger.info("PostgreSQL: ready")
+        except Exception as e:
+            logger.error(f"PostgreSQL init failed: {e}")
+            logger.warning("Continuing without database persistence")
+    else:
+        logger.warning("DATABASE_URL not set — jobs will not be persisted")
 
     yield
 
@@ -75,9 +88,11 @@ app.add_middleware(
 # Register API routes
 from api.routes.upload import router as upload_router
 from api.routes.ws import router as ws_router
+from api.routes.dbviewer import router as dbviewer_router
 
 app.include_router(upload_router)
 app.include_router(ws_router)
+app.include_router(dbviewer_router)
 
 
 # ─── Demo Endpoint ──────────────────────────────────────────
@@ -110,18 +125,36 @@ async def run_demo():
 @app.get("/api/snapshot/latest")
 async def get_latest_snapshot():
     """
-    Return the latest pre-computed analysis snapshot (if available).
-    Looks for logs/e2e_test_snapshot.json first, then any session snapshot.
-    Useful for loading results without re-running the pipeline.
+    Return the most recent completed analysis snapshot from the database.
+    Falls back to JSON file if DB is unavailable.
     """
     import json
 
-    # Check for e2e test snapshot
+    # Try DB first
+    if os.getenv("DATABASE_URL"):
+        try:
+            from db.database import list_jobs, get_snapshot
+            jobs = list_jobs()
+            completed = [j for j in jobs if j.get("status") == "complete"]
+            if completed:
+                latest_job = completed[0]  # already sorted newest first
+                snap = get_snapshot(latest_job["id"])
+                if snap:
+                    return JSONResponse(content={
+                        "status": "complete",
+                        "job_id": latest_job["id"],
+                        "audio_filename": latest_job.get("audio_filename"),
+                        "graph": snap["snapshot_json"],
+                        "transcription": snap.get("transcription_json"),
+                    })
+        except Exception as e:
+            logger.error(f"DB snapshot lookup failed: {e}")
+
+    # Fallback: check for JSON file
     snapshot_paths = [
         Path("..") / "logs" / "e2e_test_snapshot.json",
         Path("logs") / "e2e_test_snapshot.json",
     ]
-
     for snapshot_path in snapshot_paths:
         if snapshot_path.exists():
             try:
@@ -177,7 +210,7 @@ if __name__ == "__main__":
     import uvicorn
 
     host = os.getenv("BACKEND_HOST", "0.0.0.0")
-    port = int(os.getenv("BACKEND_PORT", "8000"))
+    port = int(os.getenv("BACKEND_PORT", "8020"))
 
     uvicorn.run(
         "main:app",

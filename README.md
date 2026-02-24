@@ -316,70 +316,101 @@ npx serve -s dist -l 3000
 
 ---
 
-## Fallacy Types Detected
+## Fact-Checking Pipeline — Complete I/O Reference
 
-| Fallacy | Detection Method |
-|---------|-----------------|
-| Strawman | Structural (attack edges + speaker mismatch) + LLM |
-| Circular Reasoning | Structural (DFS cycle detection in NetworkX) |
-| Goal-Post Moving | Structural (claim evolution after refutation) |
-| Ad Hominem | Rule-based (keyword patterns) + LLM |
-| False Dilemma | Rule-based + LLM |
-| Slippery Slope | Rule-based + LLM |
-| Appeal to Emotion | LLM |
-| Red Herring | LLM |
-| Appeal to Authority | Rule-based + LLM |
-| Hasty Generalization | LLM |
-| Tu Quoque | LLM |
-| Equivocation | LLM |
+The **Researcher Agent** (`backend/agents/researcher.py`) fact-checks every claim where `is_factual=True`. The `is_factual` flag is set by the Ontological Agent: a claim is considered factual if it contains verifiable statistics, dates, named studies, or specific numerical data (e.g. percentages, dollar amounts, counts).
+
+Each fact-check is a **two-step pipeline**: Tavily web search → Claude verdict synthesis.
 
 ---
 
-## Fact-Checking Pipeline — How It Works
+### Step 1 — Tavily Web Search
 
-The Researcher Agent fact-checks every claim marked `is_factual=true` by the Ontological Agent. Each fact-check involves **two API calls** in sequence:
+**File:** `backend/agents/researcher.py` → `_check_with_tavily()`  
+**Config:** `TAVILY_SEARCH_DEPTH` (default: `"advanced"`), `TAVILY_MAX_RESULTS` (default: `5`)
 
-### Step 1: Tavily Web Search
+#### Input
 
-| | Details |
-|---|--------|
-| **API** | [Tavily Search API](https://tavily.com/) |
-| **Input** | The claim text, prefixed with `"fact check: "`. Example: `"fact check: We've gone from $10 trillion of national debt to $16 trillion of national debt."` |
-| **Parameters** | `search_depth="advanced"`, `max_results=5` |
-| **Output** | A list of up to 5 web sources, each containing: URL, page title, content snippet (~200 words), and a Tavily AI-generated summary of all results combined |
+| Field | Value | Example |
+|-------|-------|---------|
+| `query` | Claim text prefixed with `"fact check: "` | `"fact check: We've gone from $10 trillion of national debt to $16 trillion."` |
+| `search_depth` | `"advanced"` (deep crawl) or `"basic"` | `"advanced"` |
+| `max_results` | Max number of sources to return | `5` |
+| `include_answer` | Always `True` — requests Tavily's AI-generated summary | `True` |
 
-Example Tavily output for the claim above:
+#### Output (raw Tavily response)
+
+```python
+{
+  "results": [
+    {
+      "title": "Ryan's Budget Spin - FactCheck.org",
+      "url": "https://www.factcheck.org/2011/05/ryans-budget-spin/",
+      "content": "...the public debt would increase from $10 trillion in 2011 to $16 trillion...",
+      # content is truncated to ~300 chars before being passed to Claude
+    },
+    # up to 4 more sources
+  ],
+  "answer": "The U.S. national debt increased from $10 trillion to $16 trillion. The rise was due to budget deficits..."
+  # Tavily's own AI-generated summary across all results
+}
 ```
-[Source 1] Ryan's Budget Spin - FactCheck.org
-  URL: https://www.factcheck.org/2011/05/ryans-budget-spin/
-  Content: "...the public debt would increase from $10 trillion in 2011 to $16 trillion in 2021..."
 
-[Source 2] History of the Debt - TreasuryDirect
-  URL: https://treasurydirect.gov/government/historical-debt-outstanding/
-  Content: "...Between 1980 and 1990, the debt..."
+The agent extracts:
+- **`sources`** — list of up to 5 URLs (stored in `FactCheckResult.sources`)
+- **`search_results_text`** — formatted string combining all source titles, URLs, content snippets, and the Tavily AI summary; passed as-is to Claude
 
-Tavily AI Summary: "The U.S. national debt increased from $10 trillion to $16 trillion.
-The rise was due to budget deficits and increased spending..."
+---
+
+### Step 2 — Claude Verdict Synthesis
+
+**File:** `backend/agents/researcher.py` → `_synthesize_verdict()`  
+**Model:** `claude-3-haiku-20240307` (configured via `LLM_MODEL` in `settings.py`)  
+**Config:** `LLM_MAX_TOKENS_FACTCHECK` (default: `1500`), `LLM_TEMPERATURE` (default: `0.1`)
+
+#### System Prompt (exact, from `settings.py`)
+
+```
+You are a fact-checking research assistant. Given a factual claim and web search results,
+determine whether the claim is supported, refuted, partially true, or unverifiable.
+
+Be precise and cite specific sources. Distinguish between exact claims and approximate ones.
 ```
 
-### Step 2: Claude Verdict Synthesis
+#### User Prompt Template (exact, from `settings.py`)
 
-| | Details |
-|---|--------|
-| **API** | Anthropic Claude Haiku (`claude-3-haiku-20240307`) |
-| **Input** | A structured prompt containing: (1) the original claim text, (2) the speaker ID, (3) all Tavily search results with URLs and content snippets |
-| **System prompt** | `"You are a fact-checking research assistant. Given a factual claim and web search results, determine whether the claim is supported, refuted, partially true, or unverifiable."` |
-| **Output** | A JSON object with: `verdict` (enum), `confidence` (0.0–1.0), `explanation` (detailed text with source references), `key_finding` (one-sentence summary) |
+```
+Based on these search results, evaluate this factual claim:
 
-Example Claude output:
+CLAIM: "{claim_text}"
+SPEAKER: {speaker}
+
+SEARCH RESULTS:
+{search_results}   ← the formatted Tavily output from Step 1
+
+Respond with ONLY valid JSON:
+{
+  "verdict": "supported|refuted|partially_true|unverifiable",
+  "confidence": 0.8,
+  "explanation": "Detailed explanation with specific references to sources",
+  "key_finding": "One-sentence summary of the verdict"
+}
+```
+
+#### Output (Claude JSON response)
+
 ```json
 {
   "verdict": "supported",
   "confidence": 0.9,
-  "explanation": "Source 1 (FactCheck.org) confirms the public debt rose from $10T to $16T. Source 2 (TreasuryDirect) provides official historical data consistent with this claim.",
+  "explanation": "Source 1 (FactCheck.org) confirms the public debt rose from $10T to $16T between 2009 and 2012. Source 2 (TreasuryDirect) provides official historical data consistent with this claim.",
   "key_finding": "The national debt figures cited are accurate based on Treasury data."
 }
 ```
+
+This is parsed into a `FactCheckResult` Pydantic object and stored in the graph.
+
+---
 
 ### Verdict Types
 
@@ -389,150 +420,303 @@ Example Claude output:
 | `refuted` | The claim is clearly false or significantly misleading |
 | `partially_true` | The claim contains some truth but is incomplete, exaggerated, or missing context |
 | `unverifiable` | Insufficient evidence found to determine truth value |
-| `pending` | Not yet checked (initial state) |
+| `pending` | Not yet checked (initial state before the agent runs) |
 
-### Error Handling
+---
 
-If Claude returns malformed JSON (observed in ~1.4% of calls), the system falls back to `verdict: "unverifiable"` with `confidence: 0.0`. No claim is left unchecked.
+### Fallback Behavior
+
+| Condition | Behavior |
+|-----------|----------|
+| No `TAVILY_API_KEY` | Returns `verdict: "unverifiable"`, `confidence: 0.3`, with a message explaining no API is configured |
+| Tavily succeeds but no `ANTHROPIC_API_KEY` | Uses keyword matching on Tavily's `answer` field to infer verdict (words like "true"/"confirmed" → `supported`; "false"/"debunked" → `refuted`) |
+| Claude returns malformed JSON | Falls back to `verdict: "unverifiable"`, `confidence: 0.0` — no claim is left without a result |
+| Any exception during Tavily call | Returns `verdict: "unverifiable"` with the error message in `explanation` |
+
+---
+
+### What Gets Stored Per Fact-Check
+
+Every fact-check produces a `FactCheckResult` with:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `claim_id` | `str` | Links back to the claim node in the graph |
+| `verdict` | `enum` | `supported / refuted / partially_true / unverifiable / pending` |
+| `confidence` | `float` | 0.0–1.0, Claude's self-reported confidence |
+| `explanation` | `str` | Full Claude explanation with source references |
+| `sources` | `list[str]` | Up to 5 URLs from Tavily |
+
+For full auditability, the raw Tavily search results (query, all source snippets, AI summary) and the exact Claude prompt + response should be persisted in the `tavily_searches` and `llm_calls` DB tables (see Database section below).
 
 ---
 
 ## Fallacy Detection — Algorithms Explained
 
-The Skeptic Agent uses **three detection methods** in sequence: structural graph analysis, rule-based keyword matching, and LLM-based classification.
+The **Skeptic Agent** (`backend/agents/skeptic.py`) runs two detection passes in sequence:
 
-### Strawman Detection
-
-A **strawman fallacy** occurs when Speaker A misrepresents Speaker B's argument, then attacks the distorted version instead of the real one.
-
-**How it's detected (structural method):**
-
-1. Find all **attack edges** in the graph (edges where `relation_type = "attack"`)
-2. For each attack edge `(attacker_claim → target_claim)`, check if the speakers are different
-3. If different speakers: compute **cosine similarity** between the attacker's claim text and the target's claim text using word-overlap (bag-of-words)
-4. If similarity is **below the threshold** (default: 0.75), the attack is flagged as a potential strawman — the attacker is attacking something that doesn't closely match what the target actually said
-
-```
-Example:
-  [Romney] "I will create 12 million jobs" (c1)
-  [Obama]  "Romney wants to fire teachers and police" (c2) --attack--> c1
-
-  Cosine similarity between c1 and c2 = 0.15 (very low)
-  → Flagged as STRAWMAN: Obama is attacking a distorted version of Romney's claim
-```
-
-The LLM also independently checks for strawman patterns, catching cases where the distortion is semantic rather than lexical.
-
-### Circular Reasoning (Cycle Detection)
-
-**Circular reasoning** occurs when a claim is used to support itself, directly or through a chain of intermediate claims.
-
-**How it's detected:**
-
-1. Run **depth-first search (DFS)** on the NetworkX directed graph, following only `support` and `implication` edges
-2. If DFS finds a **back edge** (an edge pointing to an ancestor in the DFS tree), a cycle exists
-3. Extract the full cycle path (e.g., `c1 → c3 → c7 → c1`)
-4. Flag all claims in the cycle with `fallacy_type: "circular_reasoning"`
-
-```
-Example:
-  c1: "We need more regulation" --support--> c2: "The market is failing"
-  c2: "The market is failing" --support--> c3: "Companies are irresponsible"
-  c3: "Companies are irresponsible" --support--> c1: "We need more regulation"
-
-  DFS detects cycle: c1 → c2 → c3 → c1
-  → All three claims flagged as CIRCULAR REASONING
-```
-
-In practice, cycles are rare in well-structured debates (0 cycles detected in the Obama/Romney test). When they occur, they indicate a genuine logical flaw.
-
-### Goal-Post Moving Detection
-
-**Goal-post moving** occurs when a speaker changes their success criteria or position after being challenged.
-
-**How it's detected:**
-
-1. Find all claims by the same speaker that are **targets of attack edges** from the opponent
-2. Look for subsequent claims by the same speaker that **modify or narrow** the original claim
-3. If a speaker's claim is attacked, and they later make a related but shifted claim (detected by partial text overlap + timestamp ordering), flag as goal-post moving
-
-```
-Example:
-  [Romney] "I will balance the budget" (c1, t=180s)
-  [Obama]  "The math doesn't add up" (c2, t=190s) --attack--> c1
-  [Romney] "I will balance the budget over 8-10 years" (c3, t=210s)
-
-  c3 is a narrowed version of c1, made after c1 was attacked
-  → Flagged as GOAL-POST MOVING
-```
-
-### Topic Drift Detection
-
-**Topic drift** measures how much the debate wanders from its original topics.
-
-**How it's detected:**
-
-1. Sort all claims chronologically by `timestamp_start`
-2. Compute text similarity between consecutive claims using word overlap
-3. When similarity drops below a threshold between consecutive claims, mark a **drift point**
-4. Count total drift points — higher count means more topic changes
-
-### LLM-Based Fallacy Detection
-
-For fallacies that require semantic understanding (ad hominem, appeal to emotion, hasty generalization, etc.), the system sends claim batches to Claude Haiku with a specialized prompt. The LLM returns structured JSON identifying:
-
-- Which claim contains the fallacy
-- The fallacy type (from a predefined list of 12 types)
-- Severity score (0.0–1.0)
-- A human-readable explanation
-- A Socratic question to help the listener think critically
+1. **Structural detection** — pure graph analysis, no API needed (`backend/graph/algorithms.py`)
+2. **LLM detection** — Claude classifies semantic fallacies from claim text + graph context
 
 ---
 
-## Database & Observability — Design Goals
+### What Is a Strawman?
 
-### What Should Be Stored in the Database
+A **strawman fallacy** occurs when Speaker B attacks a distorted or exaggerated version of Speaker A's argument, rather than what Speaker A actually said. The name comes from the idea of building a "straw man" (a weak, fake version of the opponent's position) that is easy to knock down.
 
-Every input and output from every agent should be persisted for full traceability:
+**Example:**
+> Speaker A: "We should reduce military spending by 10% to fund education."  
+> Speaker B: "My opponent wants to leave our country completely defenseless!"
 
-| Table | Contents | Purpose |
-|-------|----------|---------|
-| `jobs` | Job ID, status, audio filename, duration, timestamps | Track analysis runs |
-| `transcription_segments` | Speaker, text, start/end timestamps, language | Raw STT output |
-| `claims` | ID, speaker, text, claim_type, is_factual, confidence, timestamps | Ontological Agent output |
-| `relations` | Source claim ID, target claim ID, relation_type, confidence | Graph edges |
-| `fallacies` | Claim ID, fallacy_type, severity, explanation, socratic_question, related_claims | Skeptic Agent output |
-| `fact_checks` | Claim ID, verdict, confidence, explanation, sources (JSON array) | Researcher Agent output |
-| `tavily_searches` | Claim ID, search query, raw results (JSONB), timestamp | Tavily API raw I/O |
-| `llm_calls` | Agent name, model, prompt (text), response (text), tokens used, latency_ms | Full LLM audit trail |
-| `rigor_scores` | Speaker, overall_score, supported_ratio, fallacy_count, factcheck_rate, consistency | Per-speaker metrics |
-| `graph_snapshots` | Job ID, full snapshot (JSONB), created_at | Complete graph state for frontend |
+Speaker B is not attacking what A said — they've replaced A's specific, limited proposal with an extreme caricature.
 
-### Why This Matters
+#### How It's Detected (Structural — `detect_strawman_candidates()`)
 
-- **Debugging**: if a claim is miscategorized, you can trace back to the exact LLM prompt and response that produced it
-- **Auditing**: every fact-check verdict can be verified against the raw Tavily search results
-- **Reproducibility**: re-running the same audio should produce comparable results; the DB lets you compare runs
-- **Cost tracking**: `llm_calls` table tracks token usage per agent, enabling cost analysis
+**File:** `backend/graph/algorithms.py`
 
-### Frontend Visualization of DB Data
+```
+For every edge in the graph where relation_type == "attack":
+  1. Get the speaker of the attacking claim (src) and the attacked claim (tgt)
+  2. If src.speaker == tgt.speaker → skip (can't strawman yourself)
+  3. If src.speaker != tgt.speaker → this is a cross-speaker attack
+     → Flag as a strawman CANDIDATE
+     → Record: attacking_claim_id, original_claim_id, attacker, original_speaker,
+               attacking_text, original_text
+```
 
-All information stored in the database should be accessible from the frontend:
+The structural pass identifies **all cross-speaker attack edges** as candidates. It does not yet compute text similarity — that semantic check is done by the Skeptic Agent using the candidate list.
 
-| Data | Where to Display | How |
-|------|-----------------|-----|
-| **Claims + types** | Graph nodes | Color-coded by claim_type (premise=blue, conclusion=green, rebuttal=red, concession=yellow) |
-| **Relations + types** | Graph edges | Different line styles (solid=support, dashed=attack, dotted=implication) |
-| **Fallacies** | Fallacy Panel (sidebar) + node highlights | Red glow on affected nodes; click to see explanation + socratic question |
-| **Fact-check verdicts** | Badge on each node + Fact-Check Panel | Green ✓ (supported), Red ✗ (refuted), Yellow ~ (partial), Gray ? (unverifiable) |
-| **Fact-check sources** | Node detail overlay (click a node) | List of URLs with snippets from Tavily |
-| **Rigor scores** | Rigor Score panel (per speaker) | Bar chart or radar chart showing each component |
-| **Transcription** | Waveform view (bottom panel) | Synchronized transcript with speaker colors, click to jump to audio position |
-| **LLM reasoning** | Node detail overlay → "AI Reasoning" tab | Show the exact LLM prompt and response that produced each claim/fallacy/verdict |
-| **Raw Tavily results** | Node detail overlay → "Sources" tab | Full search results with URLs, snippets, and AI summary |
-| **Job history** | Job list page | Browse past analyses, click to load any previous graph |
+The **LLM pass** then independently checks for strawman patterns in the claim text, catching cases where the distortion is semantic (paraphrase, implication) rather than lexical.
 
-The key principle: **every piece of data the pipeline produces should be one click away from the graph view.** Click a node → see its claim, type, fact-check verdict, sources, fallacies, and the LLM reasoning behind each annotation.
+**Severity:** `0.5` (structural candidate) — raised by LLM if confirmed semantically.
+
+---
+
+### What Is Circular Reasoning?
+
+**Circular reasoning** (also called *petitio principii* or "begging the question") occurs when a claim is used — directly or through a chain — to support itself. The argument goes in a circle: the conclusion is assumed in the premises.
+
+**Example:**
+> "The Bible is true because it says so in the Bible."
+
+Or in a chain:
+> "We need more regulation" → supports → "The market is failing" → supports → "Companies are irresponsible" → supports → "We need more regulation"
+
+#### How It's Detected (`detect_cycles()`)
+
+**File:** `backend/graph/algorithms.py`
+
+```python
+cycles = list(nx.simple_cycles(graph))
+```
+
+NetworkX's `simple_cycles()` runs a **DFS-based algorithm** (Johnson's algorithm) that finds all elementary cycles in the directed graph. A cycle exists when DFS encounters a **back edge** — an edge pointing to an ancestor already on the current DFS path.
+
+```
+For each cycle found (e.g. [c1, c3, c7]):
+  → Flag c1 with fallacy_type: "circular_reasoning"
+  → severity: 0.7
+  → explanation: "Circular reasoning: claims c1 → c3 → c7 form a logical loop."
+  → related_claim_ids: [c3, c7]
+  → socratic_question: "Can any of these claims stand on its own without relying on the others?"
+```
+
+The cycle detection runs on **all edge types** (not just `support`/`implication`), so any directed loop in the graph is flagged. In practice, cycles are rare in well-structured debates — 0 cycles were detected in the Obama/Romney test dataset.
+
+**Complexity:** O(V + E) for the DFS traversal.
+
+---
+
+### What Is Goal-Post Moving?
+
+**Goal-post moving** occurs when a speaker shifts their position or success criteria after being challenged, without acknowledging that their original claim was weakened. Instead of conceding or defending the original point, they quietly substitute a new, narrower, or different claim.
+
+**Example:**
+> Speaker A: "My plan will balance the budget." (t=180s)  
+> Speaker B: "The math doesn't add up — it creates a $2T deficit." (t=190s) → attacks A's claim  
+> Speaker A: "Well, my plan will balance the budget over 8–10 years." (t=210s)
+
+A never conceded the original claim; they just moved the goalposts.
+
+#### How It's Detected (`detect_goalpost_moving()`)
+
+**File:** `backend/graph/algorithms.py`
+
+```
+For each speaker, sort their claims by timestamp_start.
+
+For each claim C by speaker S:
+  1. Find all incoming attack edges from a DIFFERENT speaker
+     (i.e. opponents who attacked C)
+  2. If no attackers → skip
+  3. Look at all of S's claims that come AFTER C chronologically
+  4. Check if any of those later claims have claim_type == "concession"
+     → If YES: speaker acknowledged the challenge → not goal-post moving
+     → If NO: speaker was attacked, made new claims, but never conceded
+        → Flag C as GOAL_POST_MOVING
+        → Record: speaker, original_claim_id, attacked_by (list), subsequent_claims (next 3)
+```
+
+**Severity:** `0.6`
+
+---
+
+### What Is Topic Drift?
+
+**Topic drift** measures how much the debate wanders away from its original subject matter over time.
+
+#### How It's Detected (`detect_topic_drift()`)
+
+**File:** `backend/graph/algorithms.py`
+
+```
+1. Sort all claims chronologically by timestamp_start
+2. Define "initial topic" = first window_size (default: 5) claims
+3. Slide a window of size 5 across the remaining claims
+4. For each window:
+   - Count how many claims in the window have a graph path to any initial claim
+   - connectivity = connected_count / window_size
+   - If connectivity < 0.5 → flag as a drift point
+     → Record: timestamp, connectivity_to_original, window_claims (text previews)
+```
+
+Topic drift is reported as metadata on the analysis but is not currently flagged as a fallacy — it's a structural observation about the debate's coherence.
+
+---
+
+### LLM-Based Fallacy Detection
+
+For fallacies requiring semantic understanding, the Skeptic Agent sends claim batches to Claude with a structured prompt.
+
+**System prompt (exact, from `settings.py`):**
+```
+You are an expert in informal logic, critical thinking, and argumentation theory.
+Your role is to identify logical fallacies in debate arguments with precision and fairness.
+Only flag clear fallacies — not mere rhetorical emphasis or strong language.
+A fallacy must involve a genuine logical error, not just a debatable point.
+```
+
+**User prompt** includes, for each claim:
+```
+[c1] SPEAKER_00 (premise, factual): "claim text here" --[attack]--> c3 <--[support]-- c2
+```
+
+Each claim is annotated with its ID, speaker, type, factual flag, and all its graph edges (both outgoing and incoming), giving Claude full structural context.
+
+**Claude output per fallacy:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `claim_id` | `str` | Which claim contains the fallacy |
+| `fallacy_type` | `enum` | One of the 12 supported types |
+| `severity` | `float` | 0.0–1.0 (0.3=minor, 0.5=moderate, 0.7=significant, 0.9=severe) |
+| `explanation` | `str` | Why this is a fallacy, specifically |
+| `socratic_question` | `str` | A question to prompt critical thinking (non-accusatory) |
+| `related_claim_ids` | `list[str]` | Other claims involved in the fallacy |
+
+---
+
+## Fallacy Types Detected
+
+| Fallacy | Detection Method |
+|---------|-----------------|
+| Strawman | Structural (cross-speaker attack edges) + LLM semantic check |
+| Circular Reasoning | Structural (DFS cycle detection via `nx.simple_cycles`) |
+| Goal-Post Moving | Structural (attack + no concession + later claims) |
+| Ad Hominem | Rule-based (keyword patterns) + LLM |
+| False Dilemma | Rule-based + LLM |
+| Slippery Slope | Rule-based + LLM |
+| Appeal to Emotion | LLM only |
+| Red Herring | LLM only |
+| Appeal to Authority | Rule-based + LLM |
+| Hasty Generalization | LLM only |
+| Tu Quoque | LLM only |
+| Equivocation | LLM only |
+
+---
+
+## Database & Observability
+
+### Design Goal
+
+Every input and output from every agent should be persisted for full traceability. If a claim is miscategorized, you should be able to trace back to the exact LLM prompt and response that produced it. If a fact-check verdict seems wrong, you should be able to inspect the raw Tavily results that Claude was given.
+
+### Schema
+
+| Table | Key Columns | What It Stores |
+|-------|-------------|----------------|
+| `jobs` | `job_id`, `status`, `audio_filename`, `duration_s`, `created_at`, `completed_at` | One row per analysis run |
+| `transcription_segments` | `job_id`, `speaker`, `text`, `start_s`, `end_s`, `language` | Raw STT output — one row per diarized segment |
+| `claims` | `job_id`, `claim_id`, `speaker`, `text`, `claim_type`, `is_factual`, `confidence`, `timestamp_start`, `timestamp_end` | Ontological Agent output — one row per extracted claim |
+| `relations` | `job_id`, `source_claim_id`, `target_claim_id`, `relation_type`, `confidence` | Graph edges — one row per inferred relation |
+| `fallacies` | `job_id`, `claim_id`, `fallacy_type`, `severity`, `explanation`, `socratic_question`, `related_claim_ids` (JSON array), `detection_method` (`structural`/`llm`/`rule`) | Skeptic Agent output |
+| `fact_checks` | `job_id`, `claim_id`, `verdict`, `confidence`, `explanation`, `sources` (JSON array) | Researcher Agent output — final verdict per claim |
+| `tavily_searches` | `job_id`, `claim_id`, `query`, `raw_results` (JSONB), `tavily_answer`, `searched_at` | **Full Tavily I/O** — the exact query sent and every source returned |
+| `llm_calls` | `job_id`, `agent_name`, `model`, `system_prompt`, `user_prompt`, `response_text`, `tokens_input`, `tokens_output`, `latency_ms`, `called_at` | **Full LLM audit trail** — every prompt and response from every agent |
+| `rigor_scores` | `job_id`, `speaker`, `overall_score`, `supported_ratio`, `fallacy_count`, `factcheck_rate`, `consistency_score` | Per-speaker rigor metrics |
+| `graph_snapshots` | `job_id`, `snapshot` (JSONB), `created_at` | Complete serialized graph state for frontend replay |
+
+### Why Each Table Matters
+
+- **`llm_calls`** — If a claim is miscategorized (e.g. a premise labeled as a conclusion), you can pull the exact prompt the Ontological Agent sent to Claude and the raw JSON response it received. Same for every fallacy annotation and every fact-check verdict.
+- **`tavily_searches`** — If a fact-check verdict seems wrong, you can inspect the exact sources Tavily returned and the AI summary Claude was given. The raw JSONB includes all 5 source URLs, titles, and content snippets.
+- **`fallacies.detection_method`** — Distinguishes whether a fallacy was found by structural graph analysis, rule-based keyword matching, or LLM classification. Useful for evaluating each method's precision.
+- **`rigor_scores`** — Enables longitudinal analysis: compare the same speaker across multiple debates, or track how rigor scores correlate with fact-check outcomes.
+- **`graph_snapshots`** — Enables the frontend to replay any past analysis without re-running the pipeline.
+
+---
+
+## Frontend Visualization of DB Data
+
+The key principle: **every piece of data the pipeline produces should be one click away from the graph view.**
+
+### Graph View (Primary)
+
+| Data | Visual Encoding |
+|------|----------------|
+| Claims | Nodes, color-coded by `claim_type`: premise=blue, conclusion=green, rebuttal=red, concession=yellow |
+| Speaker attribution | Node border color or shape per speaker |
+| Relations | Directed edges: solid line=support, dashed=attack, dotted=implication, double=undercut |
+| Fallacies | Red glow / warning icon on affected nodes |
+| Fact-check verdict | Badge on node: ✓ green (supported), ✗ red (refuted), ~ yellow (partially true), ? gray (unverifiable) |
+| Rigor scores | Speaker legend with score bar |
+
+### Node Detail Overlay (Click Any Node)
+
+Clicking a node opens a detail panel with **four tabs**:
+
+| Tab | Contents |
+|-----|----------|
+| **Claim** | Full claim text, speaker, type, timestamp, `is_factual` flag, confidence score |
+| **Fact-Check** | Verdict badge, confidence, full Claude explanation, list of source URLs with snippets (from `tavily_searches`) |
+| **Fallacies** | All fallacies detected on this claim: type, severity badge, explanation, socratic question, related claim IDs |
+| **AI Reasoning** | The exact LLM prompt sent to Claude and the raw response received (from `llm_calls`) — for full transparency |
+
+### Sidebar Panels
+
+| Panel | Contents |
+|-------|----------|
+| **Fallacy Panel** | Chronological list of all detected fallacies with severity badges; click to highlight the node in the graph |
+| **Fact-Check Panel** | All factual claims with their verdicts; click to jump to the node |
+| **Rigor Scores** | Per-speaker breakdown: overall score + component bars (supported ratio, fallacy penalty, fact-check rate, consistency) |
+| **Transcript** | Synchronized waveform + speaker-colored transcript; click any segment to jump to audio position and highlight the corresponding graph node |
+
+### Job History Page
+
+A dedicated page listing all past analysis runs from the `jobs` table:
+
+| Column | Description |
+|--------|-------------|
+| Job ID | Unique identifier |
+| Audio file | Original filename |
+| Duration | Audio length |
+| Status | `pending / processing / complete / failed` |
+| Claims | Count of extracted claims |
+| Fallacies | Count of detected fallacies |
+| Fact-checks | Count of verified claims |
+| Created at | Timestamp |
+
+Clicking any row loads the corresponding `graph_snapshot` and renders the full graph + all annotations — no re-processing needed.
 
 ---
 
@@ -543,11 +727,17 @@ All settings are in `backend/config/settings.py` and can be overridden via envir
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `LLM_MODEL` | `claude-3-haiku-20240307` | Primary LLM for analysis |
+| `LLM_MODEL_FALLBACK` | `claude-haiku-4-5` | Fallback if primary model fails |
+| `LLM_MAX_TOKENS_EXTRACTION` | `4096` | Max tokens for claim extraction |
+| `LLM_MAX_TOKENS_FALLACY` | `3000` | Max tokens for fallacy detection |
+| `LLM_MAX_TOKENS_FACTCHECK` | `1500` | Max tokens for fact-check verdict |
+| `LLM_TEMPERATURE` | `0.1` | Temperature (lower = more deterministic) |
 | `STT_MODEL` | `gpt-4o-transcribe-diarize` | Speech-to-text model |
 | `CHUNK_SIZE` | `10` | Segments per LLM batch |
 | `MAX_CONCURRENT_LLM_CALLS` | `3` | Parallel LLM requests |
-| `STRAWMAN_SIMILARITY_THRESHOLD` | `0.75` | Cosine similarity for strawman |
+| `STRAWMAN_SIMILARITY_THRESHOLD` | `0.75` | Cosine similarity threshold for strawman |
 | `TAVILY_SEARCH_DEPTH` | `advanced` | Tavily search depth |
+| `TAVILY_MAX_RESULTS` | `5` | Max sources per fact-check |
 | `WHISPER_MODEL` | `medium` | Local Whisper fallback model |
 
 ---

@@ -74,7 +74,8 @@ export interface FactCheckResult {
 
 export interface GraphNode {
   id: string;
-  label: string;
+  label: string;       // truncated display label
+  full_text?: string;  // complete untruncated claim text
   speaker: string;
   claim_type: ClaimType;
   timestamp_start: number;

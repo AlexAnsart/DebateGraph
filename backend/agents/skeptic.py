@@ -222,11 +222,28 @@ class SkepticAgent:
                         continue
                     
                     fallacy_type_str = f_data["fallacy_type"]
-                    # Handle potential type mismatches
+                    # Normalize common LLM variations
+                    fallacy_type_str = fallacy_type_str.lower().strip()
+                    _fallacy_aliases = {
+                        "straw_man": "strawman",
+                        "straw man": "strawman",
+                        "ad hominem": "ad_hominem",
+                        "false dilemma": "false_dilemma",
+                        "slippery slope": "slippery_slope",
+                        "circular reasoning": "circular_reasoning",
+                        "appeal to emotion": "appeal_to_emotion",
+                        "appeal to authority": "appeal_to_authority",
+                        "hasty generalization": "hasty_generalization",
+                        "goal post moving": "goal_post_moving",
+                        "goalpost moving": "goal_post_moving",
+                        "red herring": "red_herring",
+                        "tu quoque": "tu_quoque",
+                    }
+                    fallacy_type_str = _fallacy_aliases.get(fallacy_type_str, fallacy_type_str)
                     try:
                         fallacy_type = FallacyType(fallacy_type_str)
                     except ValueError:
-                        logger.warning(f"Unknown fallacy type: {fallacy_type_str}")
+                        logger.warning(f"Unknown fallacy type: {fallacy_type_str}, skipping")
                         continue
                     
                     fallacies.append(FallacyAnnotation(

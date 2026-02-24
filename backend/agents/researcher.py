@@ -196,8 +196,7 @@ class ResearcherAgent:
             )
 
             response_text = message.content[0].text
-            json_str = self._extract_json(response_text)
-            data = json.loads(json_str)
+            data = self._safe_parse_json(response_text)
 
             verdict_str = data.get("verdict", "unverifiable")
             try:
@@ -276,6 +275,44 @@ class ResearcherAgent:
                 return self._find_json_object(remaining)
 
         return self._find_json_object(text)
+
+    def _safe_parse_json(self, text: str) -> dict:
+        """Parse JSON with fallback repair for common LLM JSON errors."""
+        import re
+        json_str = self._extract_json(text)
+        
+        # First try direct parse
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+        
+        # Try to repair: replace unescaped apostrophes inside string values
+        # This handles cases like "explanation": "it's a problem"
+        try:
+            # Replace smart quotes
+            repaired = json_str.replace('\u2019', "'").replace('\u2018', "'")
+            repaired = repaired.replace('\u201c', '"').replace('\u201d', '"')
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            pass
+        
+        # Last resort: try to extract just the verdict/confidence/explanation fields
+        try:
+            verdict_match = re.search(r'"verdict"\s*:\s*"([^"]+)"', json_str)
+            confidence_match = re.search(r'"confidence"\s*:\s*([\d.]+)', json_str)
+            explanation_match = re.search(r'"explanation"\s*:\s*"((?:[^"\\]|\\.)*)"', json_str)
+            
+            if verdict_match:
+                return {
+                    "verdict": verdict_match.group(1),
+                    "confidence": float(confidence_match.group(1)) if confidence_match else 0.5,
+                    "explanation": explanation_match.group(1) if explanation_match else "",
+                }
+        except Exception:
+            pass
+        
+        raise json.JSONDecodeError("Could not parse JSON", json_str, 0)
 
     def _find_json_object(self, text: str) -> str:
         """Find the first complete JSON object in text using brace matching."""

@@ -83,13 +83,38 @@ class OntologicalAgent:
             f"Graph built: {graph_store.num_nodes} nodes, {graph_store.num_edges} edges"
         )
 
+    def _filter_segments(self, segments: list) -> list:
+        """Filter out noise segments (single words, fillers, very short fragments)."""
+        FILLER_WORDS = {
+            "uh", "um", "ah", "oh", "okay", "ok", "yeah", "yes", "no", "well",
+            "so", "and", "but", "the", "a", "i", "he", "she", "it", "we", "you",
+            "actually", "look", "now", "right", "fine", "sure", "good", "great",
+            "settled", "alright", "anyway", "indeed", "exactly", "absolutely",
+        }
+        filtered = []
+        for seg in segments:
+            text = seg.text.strip()
+            words = text.split()
+            # Skip very short segments (< 4 words) that are just fillers
+            if len(words) < 4:
+                text_lower = text.lower().rstrip('.,!?')
+                if text_lower in FILLER_WORDS or len(text) < 10:
+                    continue
+            filtered.append(seg)
+        
+        skipped = len(segments) - len(filtered)
+        if skipped > 0:
+            logger.info(f"Filtered {skipped} noise segments (kept {len(filtered)}/{len(segments)})")
+        return filtered
+
     async def _extract_with_llm_chunked(
         self,
         transcription: TranscriptionResult,
         graph_store: DebateGraphStore,
     ) -> None:
         """Extract claims using Claude API, processing in parallel chunks."""
-        segments = transcription.segments
+        # Filter noise segments before processing
+        segments = self._filter_segments(transcription.segments)
         
         if len(segments) <= CHUNK_SIZE:
             # Small enough to process in one call

@@ -1,6 +1,24 @@
 version: "3.9"
 
 services:
+  # ─── PostgreSQL (persistence) ──────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: debategraph
+      POSTGRES_USER: debategraph
+      POSTGRES_PASSWORD: debategraph
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U debategraph"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   # ─── Backend (FastAPI) ─────────────────────────────────────
   backend:
     build:
@@ -15,12 +33,16 @@ services:
       - BACKEND_PORT=8000
       - CORS_ORIGINS=http://localhost:5173,http://localhost:3000
       - REDIS_URL=redis://redis:6379
+      - DATABASE_URL=postgresql://debategraph:debategraph@postgres:5432/debategraph
     volumes:
       - ./logs:/app/logs
       - ./demos:/app/demos
       - uploads:/app/uploads
     depends_on:
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
     restart: unless-stopped
 
   # ─── Frontend (React + Vite) ───────────────────────────────
@@ -48,3 +70,4 @@ services:
 volumes:
   uploads:
   redis_data:
+  postgres_data:

@@ -244,6 +244,7 @@ class DebateGraphStore:
             nodes.append(GraphNode(
                 id=claim.id,
                 label=claim.text[:80] + ("..." if len(claim.text) > 80 else ""),
+                full_text=claim.text,
                 speaker=claim.speaker,
                 claim_type=claim.claim_type,
                 timestamp_start=claim.timestamp_start,

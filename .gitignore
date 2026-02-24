@@ -64,3 +64,4 @@ htmlcov/
 *.tmp
 spec1.docx
 spec2.md
+.blackboxcli/
