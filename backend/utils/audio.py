@@ -5,35 +5,42 @@ Uses imageio-ffmpeg bundled binary when system ffmpeg is not available.
 
 import os
 import subprocess
+import sys
 import logging
 
 logger = logging.getLogger("debategraph.transcription")
 
 
 def get_ffmpeg_path() -> str:
-    """Get ffmpeg binary path — system or bundled via imageio-ffmpeg."""
-    # Try system ffmpeg first
+    """Get ffmpeg binary path — prefer imageio-ffmpeg (bundled), then system ffmpeg."""
+    # 1. Try imageio-ffmpeg first (bundled binary, no system install needed)
+    try:
+        import imageio_ffmpeg
+        path = imageio_ffmpeg.get_ffmpeg_exe()
+        if path and os.path.exists(path):
+            logger.debug(f"Using bundled ffmpeg: {path}")
+            return path
+    except ImportError:
+        pass
+
+    # 2. Try system ffmpeg in PATH
     try:
         result = subprocess.run(
             ["ffmpeg", "-version"],
-            capture_output=True, timeout=5
+            capture_output=True,
+            timeout=5,
         )
         if result.returncode == 0:
             return "ffmpeg"
     except (FileNotFoundError, subprocess.TimeoutExpired):
         pass
 
-    # Fall back to imageio-ffmpeg bundled binary
-    try:
-        import imageio_ffmpeg
-        path = imageio_ffmpeg.get_ffmpeg_exe()
-        if os.path.exists(path):
-            return path
-    except ImportError:
-        pass
-
+    # Helpful error: use the same Python that runs the server so the package goes into venv
+    pip_cmd = f'"{sys.executable}" -m pip install imageio-ffmpeg'
     raise RuntimeError(
-        "ffmpeg not found. Install ffmpeg or run: pip install imageio-ffmpeg"
+        "ffmpeg not found. Install with the same Python that runs the server so it goes into your venv:\n"
+        f"  {pip_cmd}\n"
+        "Or install system ffmpeg and add it to PATH."
     )
 
 

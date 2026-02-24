@@ -11,7 +11,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
 # ─── LLM Model Configuration ────────────────────────────────────────────────
 
 # Primary model for fast analysis (claim extraction, fallacy detection)
-LLM_MODEL = os.getenv("LLM_MODEL", "claude-3-haiku-20240307")
+LLM_MODEL = os.getenv("LLM_MODEL", "claude-haiku-4-5")
 
 # Fallback model if primary fails
 LLM_MODEL_FALLBACK = os.getenv("LLM_MODEL_FALLBACK", "claude-haiku-4-5")

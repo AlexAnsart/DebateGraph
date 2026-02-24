@@ -245,7 +245,7 @@ Or using uvicorn with hot-reload (use `python -m uvicorn` on Windows so the relo
 bash
 python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
 ```
-**Windows troubleshooting:** If you see "Defaulting to user installation" or `ModuleNotFoundError` in the reload process, use the venv Python explicitly: `.\venv\Scripts\python.exe -m pip install -r requirements.txt` then `.\venv\Scripts\python.exe -m uvicorn ...`. For full stack (WhisperX) without a C compiler, use Python 3.12. If you are on 3.13 and cannot install Build Tools, use `requirements-core.txt` to run the backend without WhisperX (demo mode still works).
+**Windows troubleshooting:** If you see "Defaulting to user installation" or `ModuleNotFoundError` in the reload process, use the venv Python explicitly: `.\venv\Scripts\python.exe -m pip install -r requirements.txt` then `.\venv\Scripts\python.exe -m uvicorn ...`. If you get **"ffmpeg not found"** on upload, install the bundled ffmpeg with the same Python that runs the server: `.\venv\Scripts\python.exe -m pip install imageio-ffmpeg` (so it installs into the venv, not user site-packages). For full stack (WhisperX) without a C compiler, use Python 3.12. If you are on 3.13 and cannot install Build Tools, use `requirements-core.txt` to run the backend without WhisperX (demo mode still works).
 
 The backend will start at **http://localhost:8000**
 
@@ -398,7 +398,7 @@ python
 ### Step 2 — Claude Verdict Synthesis
 
 **File:** `backend/agents/researcher.py` → `_synthesize_verdict()`  
-**Model:** `claude-3-haiku-20240307` (configured via `LLM_MODEL` in `settings.py`)
+**Model:** `claude-haiku-4-5` (configured via `LLM_MODEL` in `settings.py`)
 
 #### Output (Claude JSON response)
 
@@ -541,7 +541,7 @@ All settings are in `backend/config/settings.py` and can be overridden via envir
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLM_MODEL` | `claude-3-haiku-20240307` | Primary LLM for analysis |
+| `LLM_MODEL` | `claude-haiku-4-5` | Primary LLM for analysis |
 | `LLM_TEMPERATURE` | `0.1` | Temperature (lower = more deterministic) |
 | `TAVILY_SEARCH_DEPTH` | `advanced` | Tavily search depth |
 | `TAVILY_MAX_RESULTS` | `5` | Max sources per fact-check |
@@ -550,17 +550,31 @@ All settings are in `backend/config/settings.py` and can be overridden via envir
 
 ## Logging
 
-Each analysis session creates structured logs in `logs/session_<timestamp>/`:
+Logs are stored at **project root** in the `logs/` directory (override with env `LOG_DIR`). One folder per session, named by **timestamp**: `logs/session_<YYYYmmdd_HHMMSS_ffffff>/` (e.g. `session_20260224_143022_123456`). Text logs plus **structured JSONL** for full traceability.
 
-```
-logs/session_20260215_143022/
-├── pipeline.txt       # Main pipeline flow
-├── transcription.txt  # STT details
-├── ontological.txt    # Claim extraction details
-├── skeptic.txt        # Fallacy detection details
-├── researcher.txt     # Fact-checking details
-└── errors.txt         # All errors
-```
+| File | Content |
+|------|--------|
+| `meta.json` | Session start/end times (UTC). |
+| `README.txt` | Short description of each file. |
+| `llm_calls.jsonl` | Every LLM call: provider, model, role, **input** (system + user), **output**, usage, duration, timestamp. |
+| `nodes.jsonl` | Every graph node (claim) created: node_id, claim payload, source, timestamp. |
+| `edges.jsonl` | Every edge (relation) created: source_id, target_id, relation_type, confidence, source, timestamp. |
+| `fallacies.jsonl` | Every fallacy annotation + source (skeptic_structural / skeptic_llm / skeptic_rule_based). |
+| `factchecks.jsonl` | Every fact-check result + timestamp. |
+| `transcription_chunks.jsonl` | STT chunk outputs: chunk_index, time_offset, segments, duration. |
+| `pipeline.txt` | Main pipeline flow (text). |
+| `streaming.txt` | Live streaming pipeline (text). |
+| `transcription.txt` | STT/diarization details. |
+| `ontological.txt` / `skeptic.txt` / `researcher.txt` | Per-agent text logs. |
+| `errors.txt` | All ERROR-level logs. |
+
+Each `.jsonl` line is one JSON object. Timestamps are ISO 8601 UTC.
+
+---
+
+## Real-time transcription (streaming)
+
+For **incremental graph building** and true real-time diarization, OpenAI’s **Realtime API** is the right path: transcription-only sessions over WebSocket, with `conversation.item.input_audio_transcription.delta` / `.completed` events. It supports `gpt-4o-transcribe` and `gpt-4o-transcribe-diarize`. The current **file upload** flow uses chunked batch transcription (2‑min chunks) to avoid 500 errors on long files; the **live streaming** pipeline already processes audio chunk-by-chunk. To get real-time diarization end-to-end, the next step is to plug the Realtime API (WebSocket) into the streaming pipeline instead of one-shot `audio.transcriptions.create` per chunk. See [Realtime transcription](https://platform.openai.com/docs/guides/realtime-transcription).
 
 ---
 

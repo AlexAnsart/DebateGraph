@@ -22,6 +22,7 @@ from agents.ontological import OntologicalAgent
 from agents.skeptic import SkepticAgent
 from agents.researcher import ResearcherAgent
 from config.logging_config import setup_session_logging
+from session_log.session_structured_logger import SessionLogger
 
 logger = logging.getLogger("debategraph")
 
@@ -42,11 +43,12 @@ async def run_analysis_pipeline(
     Returns:
         GraphSnapshot ready for frontend rendering
     """
-    # Set up session logging
+    # Set up session logging (text logs + structured JSONL)
     session_dir = setup_session_logging(session_id)
-    
+    session_logger = SessionLogger(session_dir)
+
     pipeline_start = time.time()
-    
+
     logger.info("=" * 60)
     logger.info("STARTING ANALYSIS PIPELINE")
     logger.info(f"Session: {session_dir}")
@@ -58,7 +60,7 @@ async def run_analysis_pipeline(
     # ─── Step 1: Ontological Agent — Claim Extraction & Graph Building ───
     t0 = time.time()
     logger.info("[Step 1/4] Ontological Agent: Extracting claims...")
-    ontological = OntologicalAgent()
+    ontological = OntologicalAgent(session_logger=session_logger)
     await ontological.extract_and_build(transcription, graph_store)
     t1 = time.time()
     logger.info(f"  → Graph: {graph_store.num_nodes} nodes, {graph_store.num_edges} edges "
@@ -66,14 +68,14 @@ async def run_analysis_pipeline(
 
     # ─── Step 2: Skeptic Agent — Fallacy Detection ──────────────────────
     logger.info("[Step 2/4] Skeptic Agent: Detecting fallacies...")
-    skeptic = SkepticAgent()
+    skeptic = SkepticAgent(session_logger=session_logger)
     fallacies = await skeptic.analyze(graph_store)
     t2 = time.time()
     logger.info(f"  → Detected {len(fallacies)} fallacies ({t2 - t1:.1f}s)")
 
     # ─── Step 3: Researcher Agent — Fact-Checking ───────────────────────
     logger.info("[Step 3/4] Researcher Agent: Fact-checking claims...")
-    researcher = ResearcherAgent()
+    researcher = ResearcherAgent(session_logger=session_logger)
     factchecks = await researcher.check_all_factual_claims(graph_store)
     t3 = time.time()
     logger.info(f"  → Fact-checked {len(factchecks)} claims ({t3 - t2:.1f}s)")
@@ -99,6 +101,7 @@ async def run_analysis_pipeline(
                 f"Fallacies: {sum(len(n.fallacies) for n in snapshot.nodes)}, "
                 f"Fact-checks: {len([n for n in snapshot.nodes if n.factcheck])}, "
                 f"Cycles: {len(snapshot.cycles_detected)}")
+    session_logger.set_ended_at()
     logger.info(f"Logs saved to: {session_dir}")
     logger.info("=" * 60)
 

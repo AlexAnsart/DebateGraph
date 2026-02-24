@@ -38,6 +38,8 @@ from graph.store import DebateGraphStore
 from agents.ontological import OntologicalAgent
 from agents.skeptic import SkepticAgent
 from agents.researcher import ResearcherAgent
+from config.logging_config import setup_session_logging
+from session_log.session_structured_logger import SessionLogger
 
 logger = logging.getLogger("debategraph.streaming")
 
@@ -118,16 +120,21 @@ class LiveStreamingPipeline:
         # OpenAI client
         self._openai_client = None
 
+        # Structured session logger (set in start() when session_dir exists)
+        self._session_logger: Optional[SessionLogger] = None
+
     async def start(self):
         """Initialize the pipeline."""
         self.start_time = time.time()
-        logger.info(f"[{self.session_id}] Live streaming pipeline started")
+        session_dir = setup_session_logging(self.session_id)
+        self._session_logger = SessionLogger(session_dir)
+        logger.info(f"[{self.session_id}] Live streaming pipeline started (logs: {session_dir})")
 
-        # Initialize agents
-        self._ontological = OntologicalAgent()
-        self._skeptic = SkepticAgent()
+        # Initialize agents with session logger for structured LLM/node/edge logs
+        self._ontological = OntologicalAgent(session_logger=self._session_logger)
+        self._skeptic = SkepticAgent(session_logger=self._session_logger)
         if self.enable_factcheck:
-            self._researcher = ResearcherAgent()
+            self._researcher = ResearcherAgent(session_logger=self._session_logger)
 
         # Initialize OpenAI client
         api_key = os.getenv("OPENAI_API_KEY", "")
@@ -196,6 +203,15 @@ class LiveStreamingPipeline:
         if not new_segments:
             logger.info(f"[{self.session_id}] Chunk {chunk_index}: no segments transcribed")
             return
+
+        transcribe_duration = time.time() - chunk_start
+        if self._session_logger:
+            self._session_logger.log_transcription_chunk(
+                chunk_index=chunk_index,
+                time_offset=time_offset,
+                segments=[s.model_dump() for s in new_segments],
+                duration_seconds=round(transcribe_duration, 3),
+            )
 
         # Add to full transcript
         self.all_segments.extend(new_segments)
@@ -286,6 +302,8 @@ class LiveStreamingPipeline:
             f"in {total_time:.1f}s"
         )
 
+        if self._session_logger:
+            self._session_logger.set_ended_at()
         await self.on_update({
             "type": "stream_complete",
             "session_id": self.session_id,
