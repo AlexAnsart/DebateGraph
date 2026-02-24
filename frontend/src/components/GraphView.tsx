@@ -247,15 +247,39 @@ export default function GraphView({
     };
   }, [onNodeSelect, getSpeakerColor]);
 
-  // Update graph data
+  // Track previous node count to detect incremental updates
+  const prevNodeCountRef = useRef(0);
+
+  // Update graph data — supports incremental updates
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy || !graph) return;
 
-    cy.elements().remove();
+    const existingNodeIds = new Set(cy.nodes().map((n) => n.id()));
+    const existingEdgeIds = new Set(cy.edges().map((e) => e.id()));
+    const newNodeIds = new Set(graph.nodes.map((n) => n.id));
+    const newEdgeIds = new Set(graph.edges.map((e) => `${e.source}-${e.target}`));
 
-    // Add nodes
-    const elements: cytoscape.ElementDefinition[] = [];
+    // Check if this is an incremental update (nodes only added, not replaced)
+    const isIncremental =
+      prevNodeCountRef.current > 0 &&
+      graph.nodes.length >= prevNodeCountRef.current &&
+      [...existingNodeIds].every((id) => newNodeIds.has(id));
+
+    if (!isIncremental) {
+      // Full rebuild: remove all and re-add
+      cy.elements().remove();
+    } else {
+      // Remove nodes/edges that no longer exist (rare but possible)
+      cy.nodes().forEach((n) => {
+        if (!newNodeIds.has(n.id())) n.remove();
+      });
+      cy.edges().forEach((e) => {
+        if (!newEdgeIds.has(e.id())) e.remove();
+      });
+    }
+
+    const newElements: cytoscape.ElementDefinition[] = [];
 
     graph.nodes.forEach((node, i) => {
       const border = getNodeBorder(node);
@@ -264,42 +288,54 @@ export default function GraphView({
           ? node.label.substring(0, 37) + "..."
           : node.label;
 
-      elements.push({
-        group: "nodes",
-        data: {
-          id: node.id,
-          label: truncatedLabel,
-          fullLabel: node.label,
-          fullText: node.full_text || node.label,
-          speaker: node.speaker,
-          claimType: node.claim_type,
-          timestampStart: node.timestamp_start,
-          timestampEnd: node.timestamp_end,
-          confidence: node.confidence,
-          isFactual: node.is_factual,
-          factcheckVerdict: node.factcheck_verdict,
-          factcheck: node.factcheck,
-          fallacies: node.fallacies,
-          bgColor: getSpeakerColor(node.speaker),
-          shape: getNodeShape(node.claim_type),
-          size: node.claim_type === "conclusion" ? 70 : 55,
-          borderWidth: border.borderWidth,
-          borderColor: border.borderColor,
-        },
-        position: {
-          // Arrange in a force-directed-like layout
-          x: 150 + (i % 4) * 200 + Math.random() * 50,
-          y: 100 + Math.floor(i / 4) * 150 + Math.random() * 50,
-        },
-      });
+      const nodeData = {
+        id: node.id,
+        label: truncatedLabel,
+        fullLabel: node.label,
+        fullText: node.full_text || node.label,
+        speaker: node.speaker,
+        claimType: node.claim_type,
+        timestampStart: node.timestamp_start,
+        timestampEnd: node.timestamp_end,
+        confidence: node.confidence,
+        isFactual: node.is_factual,
+        factcheckVerdict: node.factcheck_verdict,
+        factcheck: node.factcheck,
+        fallacies: node.fallacies,
+        bgColor: getSpeakerColor(node.speaker),
+        shape: getNodeShape(node.claim_type),
+        size: node.claim_type === "conclusion" ? 70 : 55,
+        borderWidth: border.borderWidth,
+        borderColor: border.borderColor,
+      };
+
+      if (isIncremental && existingNodeIds.has(node.id)) {
+        // Update existing node data (e.g. fallacies, factcheck may have changed)
+        const cyNode = cy.getElementById(node.id);
+        cyNode.data(nodeData);
+      } else {
+        // New node
+        newElements.push({
+          group: "nodes",
+          data: nodeData,
+          position: {
+            x: 150 + (i % 4) * 200 + Math.random() * 50,
+            y: 100 + Math.floor(i / 4) * 150 + Math.random() * 50,
+          },
+        });
+      }
     });
 
-    // Add edges
     graph.edges.forEach((edge) => {
-      elements.push({
+      const edgeId = `${edge.source}-${edge.target}`;
+      if (isIncremental && existingEdgeIds.has(edgeId)) {
+        // Edge already exists, skip
+        return;
+      }
+      newElements.push({
         group: "edges",
         data: {
-          id: `${edge.source}-${edge.target}`,
+          id: edgeId,
           source: edge.source,
           target: edge.target,
           color: EDGE_COLORS[edge.relation_type as EdgeType] || "#6b7280",
@@ -308,13 +344,17 @@ export default function GraphView({
       });
     });
 
-    cy.add(elements);
+    if (newElements.length > 0) {
+      cy.add(newElements);
+    }
 
-    // Run layout
+    prevNodeCountRef.current = graph.nodes.length;
+
+    // Run layout — use shorter animation for incremental updates
     cy.layout({
       name: "cose",
       animate: true,
-      animationDuration: 500,
+      animationDuration: isIncremental ? 300 : 500,
       nodeRepulsion: () => 8000,
       idealEdgeLength: () => 150,
       gravity: 0.3,

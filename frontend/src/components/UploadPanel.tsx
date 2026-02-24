@@ -16,6 +16,8 @@ interface UploadPanelProps {
 const ACCEPTED_FORMATS = [
   "audio/wav", "audio/mpeg", "audio/mp3", "audio/ogg",
   "audio/flac", "audio/webm", "video/mp4", "video/webm", "video/ogg",
+  "video/x-matroska", "video/avi", "video/quicktime",
+  ".mp4", ".webm", ".avi", ".mkv", ".mov", ".m4v",
 ];
 
 function formatDate(iso: string): string {
@@ -246,7 +248,7 @@ export default function UploadPanel({
         <p className="text-sm text-gray-400 mb-1">
           {isDragging ? "Drop your file here" : "Drag & drop audio/video, or click"}
         </p>
-        <p className="text-xs text-gray-600">WAV, MP3, OGG, FLAC, WebM, MP4</p>
+        <p className="text-xs text-gray-600">Audio: WAV, MP3, OGG, FLAC · Video: MP4, WebM, AVI, MKV</p>
       </div>
 
       {/* Selected file info */}
