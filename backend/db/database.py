@@ -31,6 +31,7 @@ CREATE TABLE IF NOT EXISTS jobs (
     status        TEXT        NOT NULL DEFAULT 'processing',
     created_at    TIMESTAMP   NOT NULL DEFAULT NOW(),
     audio_filename TEXT,
+    source_path   TEXT,
     duration_s    FLOAT,
     progress      FLOAT       NOT NULL DEFAULT 0.0,
     error         TEXT
@@ -81,6 +82,20 @@ def init_db() -> bool:
             with conn.cursor() as cur:
                 cur.execute(_CREATE_JOBS)
                 cur.execute(_CREATE_SNAPSHOTS)
+                # Migration: add source_path if missing (for local path jobs)
+                try:
+                    cur.execute("""
+                        DO $$ BEGIN
+                            IF NOT EXISTS (
+                                SELECT 1 FROM information_schema.columns
+                                WHERE table_schema = 'public' AND table_name = 'jobs' AND column_name = 'source_path'
+                            ) THEN
+                                ALTER TABLE jobs ADD COLUMN source_path TEXT;
+                            END IF;
+                        END $$
+                    """)
+                except Exception:
+                    pass
         conn.close()
         db_available = True
         logger.info("PostgreSQL: tables initialized (jobs, graph_snapshots)")
@@ -93,7 +108,7 @@ def init_db() -> bool:
 
 # ─── Job CRUD ────────────────────────────────────────────────────────────────
 
-def create_job(job_id: str, audio_filename: str = None) -> None:
+def create_job(job_id: str, audio_filename: str = None, source_path: str = None) -> None:
     """Insert a new job row with status='processing'."""
     if not db_available:
         logger.debug("DB unavailable: skipping create_job")
@@ -105,11 +120,11 @@ def create_job(job_id: str, audio_filename: str = None) -> None:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO jobs (id, status, audio_filename, progress)
-                    VALUES (%s, 'processing', %s, 0.0)
+                    INSERT INTO jobs (id, status, audio_filename, source_path, progress)
+                    VALUES (%s, 'processing', %s, %s, 0.0)
                     ON CONFLICT (id) DO NOTHING
                     """,
-                    (job_id, audio_filename),
+                    (job_id, audio_filename, source_path),
                 )
         logger.debug(f"DB: created job {job_id}")
     except psycopg2.OperationalError as e:

@@ -464,7 +464,7 @@ export default function GraphView({
                 d="M13 10V3L4 14h7v7l9-11h-7z"
               />
             </svg>
-            <p className="text-sm">Upload audio or run demo to see the argument graph</p>
+            <p className="text-sm">Upload audio to see the argument graph</p>
           </div>
         </div>
       )}

@@ -87,6 +87,12 @@ def crop_audio(
     return output_path
 
 
+def _is_video_file(path: str) -> bool:
+    """True if the file is a video format (has video stream to skip)."""
+    ext = os.path.splitext(path)[1].lower()
+    return ext in {".mp4", ".webm", ".avi", ".mkv", ".mov", ".flv"}
+
+
 def convert_to_wav(input_path: str, output_path: str = None) -> str:
     """
     Convert audio/video to WAV 16kHz mono (optimal for Whisper).
@@ -104,6 +110,10 @@ def convert_to_wav(input_path: str, output_path: str = None) -> str:
     if output_path is None:
         output_path = os.path.splitext(input_path)[0] + ".wav"
     
+    # Use absolute path to avoid Windows/OneDrive path issues
+    input_path = os.path.abspath(input_path)
+    output_path = os.path.abspath(output_path)
+    
     ffmpeg = get_ffmpeg_path()
     
     cmd = [
@@ -111,17 +121,23 @@ def convert_to_wav(input_path: str, output_path: str = None) -> str:
         "-i", input_path,
         "-ar", "16000",
         "-ac", "1",
-        "-acodec", "pcm_s16le",
+        "-c:a", "pcm_s16le",
         "-y",
         output_path,
     ]
+    # For video files, skip video stream (extract audio only)
+    if _is_video_file(input_path):
+        cmd.insert(3, "-vn")  # -vn after -i input_path
     
     logger.info(f"Converting to WAV: {input_path} -> {output_path}")
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
     
     if result.returncode != 0:
-        logger.error(f"ffmpeg convert failed: {result.stderr[:500]}")
-        raise RuntimeError(f"ffmpeg conversion failed: {result.stderr[:200]}")
+        # ffmpeg prints version banner first; actual error is usually at the end
+        err_lines = result.stderr.strip().split("\n")
+        err_tail = "\n".join(err_lines[-8:]) if len(err_lines) > 8 else result.stderr
+        logger.error(f"ffmpeg convert failed: {err_tail}")
+        raise RuntimeError(f"ffmpeg conversion failed: {err_tail}")
     
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
     logger.info(f"WAV saved: {output_path} ({size_mb:.1f} MB)")

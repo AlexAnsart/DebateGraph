@@ -2,6 +2,7 @@
 Upload endpoint for audio/video files.
 Handles file reception, conversion to WAV, and triggers the analysis pipeline.
 All jobs and snapshots are persisted to PostgreSQL.
+Uses chunk-based streaming with aiofiles for reliable video/audio uploads.
 """
 
 import os
@@ -10,11 +11,13 @@ import asyncio
 import logging
 from pathlib import Path
 
+import aiofiles
 import mimetypes
 
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse, FileResponse
 
+from config.settings import UPLOAD_DIR as UPLOAD_DIR_CFG
 from api.models.schemas import (
     UploadResponse,
     AnalysisStatus,
@@ -38,7 +41,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api", tags=["upload"])
 
-UPLOAD_DIR = Path("uploads")
+UPLOAD_DIR = Path(UPLOAD_DIR_CFG).resolve()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".mp4", ".webm", ".ogg", ".flac", ".m4a", ".avi", ".mkv"}
@@ -46,13 +49,13 @@ MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB
 
 
 def _has_media_file(job_id: str) -> bool:
-    """Check if an original (non-WAV) media file exists for this job."""
+    """Check if an original (non-WAV) media file exists for this job in UPLOAD_DIR."""
     matches = list(UPLOAD_DIR.glob(f"{job_id}.*"))
     return any(m.suffix != ".wav" for m in matches)
 
 
 def _get_media_url(job_id: str) -> str | None:
-    """Return the media URL for a job if the file exists on disk."""
+    """Return the media URL for a job if the file exists in UPLOAD_DIR."""
     if _has_media_file(job_id):
         return f"/api/media/{job_id}"
     return None
@@ -64,14 +67,12 @@ def _get_media_url(job_id: str) -> str | None:
 async def serve_media(job_id: str):
     """Serve the uploaded media file for video/audio playback."""
     matches = list(UPLOAD_DIR.glob(f"{job_id}.*"))
-    # Prefer original format over .wav conversion
     originals = [m for m in matches if m.suffix != ".wav"] or matches
     if not originals:
         raise HTTPException(status_code=404, detail=f"Media file for job '{job_id}' not found")
 
     file_path = originals[0]
     media_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-
     return FileResponse(
         path=str(file_path),
         media_type=media_type,
@@ -81,6 +82,9 @@ async def serve_media(job_id: str):
 
 # ─── Upload ──────────────────────────────────────────────────
 
+CHUNK_SIZE = 1024 * 1024  # 1 MB chunks for streaming
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_file(
     background_tasks: BackgroundTasks,
@@ -88,8 +92,8 @@ async def upload_file(
 ):
     """
     Upload an audio or video file for analysis.
-    The file is saved, and the analysis pipeline is launched as a background task.
-    Job state is persisted to PostgreSQL.
+    Uses chunk-based streaming to avoid memory issues and ensure complete writes.
+    Supports both audio (WAV, MP3, etc.) and video (MP4, WebM, etc.).
     """
     ext = Path(file.filename or "unknown.wav").suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
@@ -99,25 +103,45 @@ async def upload_file(
         )
 
     job_id = str(uuid.uuid4())
-    file_path = UPLOAD_DIR / f"{job_id}{ext}"
+    final_path = UPLOAD_DIR / f"{job_id}{ext}"
 
     try:
-        content = await file.read()
-        if len(content) > MAX_FILE_SIZE:
-            raise HTTPException(status_code=413, detail="File too large (max 500 MB)")
-        with open(file_path, "wb") as f:
-            f.write(content)
+        total_bytes = 0
+        async with aiofiles.open(final_path, "wb") as f:
+            while True:
+                chunk = await file.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                if total_bytes + len(chunk) > MAX_FILE_SIZE:
+                    await file.close()
+                    final_path.unlink(missing_ok=True)
+                    raise HTTPException(status_code=413, detail="File too large (max 500 MB)")
+                await f.write(chunk)
+                total_bytes += len(chunk)
+
+        await file.close()
+
+        if total_bytes == 0:
+            final_path.unlink(missing_ok=True)
+            raise HTTPException(status_code=400, detail="Empty file")
+
+        # Verify write completed
+        final_size = final_path.stat().st_size
+        if final_size != total_bytes:
+            final_path.unlink(missing_ok=True)
+            raise RuntimeError(f"Write incomplete: {final_size} != {total_bytes}")
+
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"Failed to save uploaded file: {e}")
+        final_path.unlink(missing_ok=True)
         raise HTTPException(status_code=500, detail="Failed to save file")
 
-    # Persist job to DB
     create_job(job_id, audio_filename=file.filename)
 
-    # Launch analysis pipeline in background
-    background_tasks.add_task(process_file, job_id, str(file_path), file.filename)
+    # Delay before ffmpeg (Windows Defender can briefly lock new files)
+    background_tasks.add_task(process_file, job_id, str(final_path), file.filename)
 
     return UploadResponse(
         job_id=job_id,
@@ -126,12 +150,25 @@ async def upload_file(
     )
 
 
-async def process_file(job_id: str, file_path: str, original_filename: str = None):
+async def process_file(
+    job_id: str,
+    file_path: str,
+    original_filename: str = None,
+):
     """
     Background task: runs the full analysis pipeline on an uploaded file.
-    Updates job status in PostgreSQL at each stage.
+    File is in UPLOAD_DIR. Extracts audio from video, transcribes, builds graph.
     """
+    path = Path(file_path).resolve()
     try:
+        # Brief delay so Windows Defender/antivirus releases file handle
+        await asyncio.sleep(1)
+
+        if not path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+        if path.stat().st_size == 0:
+            raise FileNotFoundError(f"File is empty: {file_path}")
+
         # Stage 1: Transcription
         update_job_status(job_id, "transcribing", progress=0.1)
         logger.info(f"[{job_id}] Starting transcription of {original_filename}...")
@@ -156,12 +193,30 @@ async def process_file(job_id: str, file_path: str, original_filename: str = Non
         transcription_dict = transcription.model_dump(mode="json")
         save_snapshot(job_id, snapshot_dict, transcription_dict)
 
+        # Clean up temp WAV (original stays in UPLOAD_DIR for media serving)
+        wav_p = Path(wav_path)
+        if wav_p.exists():
+            wav_p.unlink()
+
         update_job_status(job_id, "complete", progress=1.0)
         logger.info(f"[{job_id}] Analysis complete — persisted to DB")
 
     except Exception as e:
         logger.error(f"[{job_id}] Pipeline error: {e}", exc_info=True)
         update_job_status(job_id, "error", error=str(e))
+        # Clean up temp WAV
+        wav_p = Path(file_path).with_suffix(".wav")
+        if wav_p.exists():
+            try:
+                wav_p.unlink()
+            except OSError:
+                pass
+        # Clean up uploaded file on error
+        if path.exists():
+            try:
+                path.unlink()
+            except OSError:
+                pass
 
 
 async def convert_to_wav(file_path: str) -> str:

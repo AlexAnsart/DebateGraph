@@ -49,7 +49,8 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
 
     # Ensure upload directory exists
-    Path("uploads").mkdir(parents=True, exist_ok=True)
+    from config.settings import UPLOAD_DIR
+    Path(UPLOAD_DIR).mkdir(parents=True, exist_ok=True)
 
     # Initialize PostgreSQL tables
     if os.getenv("DATABASE_URL"):
