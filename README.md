@@ -46,7 +46,7 @@ Frontend runs at **http://localhost:5173**.
 3. An **analysis pipeline** runs: extract claims → build argument graph → detect fallacies → fact-check factual claims → compute rigor scores.
 4. The frontend **polls** job status and shows progress (transcribing → extracting → complete). When complete, it displays the graph, fallacies, fact-checks, and rigor scores.
 
-So “real-time” here means: **live progress during analysis**, and (in live mic/video stream mode) **incremental graph updates** as chunks are processed. The core value is **claim verification and fallacy detection** applied to the full debate once (or incrementally in stream mode).
+So “real-time” here means: **live progress during analysis**, and (in audio/video stream mode) **incremental graph updates** as chunks are processed. The core value is **claim verification and fallacy detection** applied to the full debate once (or incrementally in stream mode).
 
 ### Pipeline (backend)
 
@@ -70,7 +70,7 @@ So “real-time” here means: **live progress during analysis**, and (in live m
 ### Modes
 
 - **Upload**: Upload a file → backend creates a job, runs the pipeline in the background, saves the snapshot to PostgreSQL. Frontend polls `GET /api/status/{job_id}` until complete, then shows the graph.
-- **Live stream** (optional): Microphone or audio/video stream sends chunks over WebSocket; backend processes them and pushes updates so the graph grows in real time.
+- **Live stream** (optional): Audio/video file stream sends chunks over WebSocket; backend processes them and pushes updates so the graph grows in real time.
 
 ### Fallacies detected
 
@@ -102,7 +102,7 @@ backend/
   db/                   # PostgreSQL jobs + graph_snapshots
 frontend/
   src/
-    App.tsx             # Modes: idle, upload, live, video, audio-stream, video-review
+    App.tsx             # Modes: idle, upload, video, audio-stream, video-review
     api.ts              # upload, getJobStatus, loadSnapshot
     components/         # GraphView, WaveformView, FallacyPanel, RigorScore, UploadPanel, …
 ```

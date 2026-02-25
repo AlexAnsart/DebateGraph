@@ -16,12 +16,11 @@ import VideoPlayer from "./components/VideoPlayer";
 import VideoReviewPlayer from "./components/VideoReviewPlayer";
 import type { VideoReviewPlayerHandle } from "./components/VideoReviewPlayer";
 import { useLiveStream } from "./hooks/useLiveStream";
-import { useAudioCapture } from "./hooks/useAudioCapture";
 import { useVideoStream } from "./hooks/useVideoStream";
 import { useAudioFileStream } from "./hooks/useAudioFileStream";
 import { SPEAKER_COLORS } from "./types";
 
-type AppMode = "idle" | "upload" | "live" | "video" | "audio-stream" | "video-review";
+type AppMode = "idle" | "upload" | "video" | "audio-stream" | "video-review";
 
 export default function App() {
   // ── State ──────────────────────────────────────────────────────────────────
@@ -50,21 +49,6 @@ export default function App() {
       setGraph(g);
       if (t) setTranscription(t);
     }, []),
-    onError: useCallback((err: string) => {
-      setError(err);
-    }, []),
-  });
-
-  const chunkIndexRef = useRef(0);
-
-  const audioCapture = useAudioCapture({
-    chunkDurationMs: 15000,
-    onChunk: useCallback(
-      (chunk: ArrayBuffer, chunkIndex: number, timeOffset: number) => {
-        liveStream.sendChunk(chunk, chunkIndex, timeOffset);
-      },
-      [liveStream.sendChunk]
-    ),
     onError: useCallback((err: string) => {
       setError(err);
     }, []),
@@ -110,7 +94,6 @@ export default function App() {
     return graph.nodes.flatMap((n) => n.fallacies);
   }, [graph]);
 
-  const isLive = mode === "live" && audioCapture.state.isRecording;
   const isVideoMode = mode === "video";
   const isVideoReviewMode = mode === "video-review";
   const isAudioStreamMode = mode === "audio-stream";
@@ -244,33 +227,6 @@ export default function App() {
     }
   }, []);
 
-  const handleStartLive = useCallback(async () => {
-    setError(null);
-    setGraph(null);
-    setTranscription(null);
-    setSelectedNode(null);
-    setAudioUrl(null);
-    setVideoUrl(null);
-    setMode("live");
-    liveStream.reset();
-    chunkIndexRef.current = 0;
-
-    try {
-      await liveStream.connect();
-      await audioCapture.start();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : "Failed to start live stream";
-      setError(msg);
-      setMode("idle");
-    }
-  }, [liveStream, audioCapture]);
-
-  const handleStopLive = useCallback(async () => {
-    await audioCapture.stop();
-    liveStream.stop();
-    setMode("idle");
-  }, [audioCapture, liveStream]);
-
   // Video controls (legacy real-time mode)
   const handleVideoPlay = useCallback(() => { videoStream.play(); }, [videoStream]);
   const handleVideoPause = useCallback(() => { videoStream.pause(); }, [videoStream]);
@@ -322,14 +278,6 @@ export default function App() {
     setGraphFullscreen(false);
   }, []);
 
-  // ── Live stats for UploadPanel ─────────────────────────────────────────────
-  const liveStats = useMemo(() => ({
-    nodes: liveStream.state.nodeCount,
-    chunks: liveStream.state.chunkCount,
-    duration: audioCapture.state.duration,
-    audioLevel: audioCapture.state.audioLevel,
-  }), [liveStream.state, audioCapture.state]);
-
   // ── Status bar text ────────────────────────────────────────────────────────
   const statusText = useMemo(() => {
     if (mode === "video-review") {
@@ -354,18 +302,10 @@ export default function App() {
       if (as_.status === "paused") return `Paused — ${liveStream.state.nodeCount} nodes`;
       if (as_.status === "complete") return "Audio analysis complete";
     }
-    if (mode === "live") {
-      const s = liveStream.state.status;
-      if (s === "connecting") return "Connecting...";
-      if (s === "recording") return `Recording — ${liveStats.nodes} nodes`;
-      if (s === "processing") return "Processing chunk...";
-      if (s === "finalizing") return "Finalizing...";
-      if (s === "complete") return "Stream complete";
-    }
     if (isLoading) return "Analyzing...";
     if (graph) return `${graph.nodes.length} claims · ${graph.edges.length} relations · ${allFallacies.length} fallacies`;
     return null;
-  }, [mode, processingJobId, processingStatus, currentTime, videoStream.state, audioFileStream.state, liveStream.state.status, liveStream.state.nodeCount, liveStats.nodes, isLoading, graph, allFallacies.length]);
+  }, [mode, processingJobId, processingStatus, currentTime, videoStream.state, audioFileStream.state, liveStream.state.status, liveStream.state.nodeCount, isLoading, graph, allFallacies.length]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -377,7 +317,7 @@ export default function App() {
             <span className="text-blue-400">Debate</span>Graph
           </h1>
           <span className="text-xs text-gray-600 font-mono">v0.6</span>
-          {(mode === "live" || isVideoPlaying || isAudioStreamPlaying) && (
+          {(isVideoPlaying || isAudioStreamPlaying) && (
             <span className="flex items-center gap-1.5 px-2 py-0.5 bg-red-900/30 border border-red-800 rounded-full text-xs text-red-400">
               <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
               LIVE
@@ -620,11 +560,7 @@ export default function App() {
               <UploadPanel
                 onUpload={handleUpload}
                 onLoadSnapshot={handleLoadSnapshot}
-                onStartLive={handleStartLive}
-                onStopLive={handleStopLive}
                 isLoading={isLoading || !!processingJobId}
-                isLive={isLive}
-                liveStats={liveStats}
               />
 
               {/* Processing overlay (video batch upload) */}
@@ -738,22 +674,6 @@ export default function App() {
                       </div>
                       <p className="text-gray-400 text-sm">{audioFileStream.state.status === "playing" ? "Analyzing audio..." : "Press play to start analysis"}</p>
                       <p className="text-gray-600 text-xs mt-1">Graph builds in real-time as audio plays</p>
-                    </div>
-                  </div>
-                )}
-
-                {/* Live overlay */}
-                {mode === "live" && !graph && (
-                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    <div className="text-center">
-                      <div className="w-16 h-16 rounded-full bg-red-900/20 border-2 border-red-700 flex items-center justify-center mx-auto mb-4 animate-pulse">
-                        <svg className="w-8 h-8 text-red-400" fill="currentColor" viewBox="0 0 24 24">
-                          <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
-                          <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
-                        </svg>
-                      </div>
-                      <p className="text-gray-400 text-sm">Listening...</p>
-                      <p className="text-gray-600 text-xs mt-1">Graph will appear after the first 15s chunk</p>
                     </div>
                   </div>
                 )}
