@@ -1,7 +1,7 @@
 """
 WebSocket handlers:
   /ws/{job_id}   — polls job status from PostgreSQL (file upload mode)
-  /ws/stream     — live microphone streaming with incremental graph updates
+  /ws/stream     — live audio/video stream with incremental graph updates
 """
 
 import json

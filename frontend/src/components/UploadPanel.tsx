@@ -5,11 +5,7 @@ import type { JobMeta } from "../api";
 interface UploadPanelProps {
   onUpload: (file: File) => void;
   onLoadSnapshot: (jobId: string) => void;
-  onStartLive: () => void;
-  onStopLive: () => void;
   isLoading: boolean;
-  isLive: boolean;
-  liveStats?: { nodes: number; chunks: number; duration: number; audioLevel: number };
 }
 
 function formatDate(iso: string): string {
@@ -51,30 +47,6 @@ function StatusDot({ status }: { status: string }) {
   );
 }
 
-/** VU meter bar */
-function VuMeter({ level }: { level: number }) {
-  const bars = 12;
-  return (
-    <div className="flex items-end gap-0.5 h-5">
-      {Array.from({ length: bars }).map((_, i) => {
-        const threshold = i / bars;
-        const active = level > threshold;
-        const color = i < bars * 0.6 ? "#22c55e" : i < bars * 0.85 ? "#f59e0b" : "#ef4444";
-        return (
-          <div
-            key={i}
-            className="w-1 rounded-sm transition-all duration-75"
-            style={{
-              height: `${40 + (i / bars) * 60}%`,
-              backgroundColor: active ? color : "#374151",
-            }}
-          />
-        );
-      })}
-    </div>
-  );
-}
-
 const ACCEPTED_FORMATS = [
   "audio/wav", "audio/mpeg", "audio/mp3", "audio/ogg",
   "audio/flac", "audio/webm", "video/mp4", "video/webm", "video/ogg",
@@ -85,11 +57,7 @@ const ACCEPTED_FORMATS = [
 export default function UploadPanel({
   onUpload,
   onLoadSnapshot,
-  onStartLive,
-  onStopLive,
   isLoading,
-  isLive,
-  liveStats,
 }: UploadPanelProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -143,81 +111,6 @@ export default function UploadPanel({
 
   return (
     <div className="space-y-4">
-
-      {/* ── LIVE MODE PANEL ── */}
-      <div className={`rounded-xl border-2 transition-all duration-300 overflow-hidden
-        ${isLive
-          ? "border-red-500 bg-red-950/10"
-          : "border-gray-700 hover:border-gray-600"
-        }`}
-      >
-        {isLive ? (
-          /* Recording state */
-          <div className="p-4 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-pulse" />
-                <span className="text-sm font-semibold text-red-400">LIVE</span>
-                {liveStats && (
-                  <span className="text-xs text-gray-500">
-                    {formatDuration(liveStats.duration)}
-                  </span>
-                )}
-              </div>
-              <button
-                onClick={onStopLive}
-                className="px-3 py-1.5 bg-red-700 hover:bg-red-600 text-white text-xs font-semibold rounded-lg transition-colors"
-              >
-                Stop
-              </button>
-            </div>
-
-            {/* VU meter */}
-            {liveStats && (
-              <div className="flex items-center gap-3">
-                <VuMeter level={liveStats.audioLevel} />
-                <div className="text-xs text-gray-500 space-x-3">
-                  <span>{liveStats.chunks} chunks</span>
-                  <span>{liveStats.nodes} nodes</span>
-                </div>
-              </div>
-            )}
-
-            <p className="text-xs text-gray-500">
-              Listening… Graph updates every ~15s
-            </p>
-          </div>
-        ) : (
-          /* Start live button */
-          <button
-            onClick={onStartLive}
-            disabled={isLoading}
-            className={`w-full flex items-center justify-center gap-3 p-4 transition-all
-              ${isLoading
-                ? "opacity-50 cursor-not-allowed"
-                : "hover:bg-gray-900/50 cursor-pointer"
-              }`}
-          >
-            <div className="w-10 h-10 rounded-full bg-red-900/30 border-2 border-red-700 flex items-center justify-center shrink-0">
-              <svg className="w-5 h-5 text-red-400" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
-                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
-              </svg>
-            </div>
-            <div className="text-left">
-              <p className="text-sm font-semibold text-gray-200">Live Analysis</p>
-              <p className="text-xs text-gray-500">Record microphone in real-time</p>
-            </div>
-          </button>
-        )}
-      </div>
-
-      {/* ── DIVIDER ── */}
-      <div className="flex items-center gap-2">
-        <div className="flex-1 h-px bg-gray-800" />
-        <span className="text-xs text-gray-600">or upload file</span>
-        <div className="flex-1 h-px bg-gray-800" />
-      </div>
 
       {/* ── DROP ZONE ── */}
       <div
