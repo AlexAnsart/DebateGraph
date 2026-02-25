@@ -7,6 +7,7 @@ interface GraphViewProps {
   graph: GraphSnapshot | null;
   onNodeSelect: (selected: SelectedNode | null) => void;
   highlightTimestamp?: number | null;
+  maxTimestamp?: number | null;
 }
 
 // Get color based on claim type (defined outside component to avoid closure issues)
@@ -48,6 +49,7 @@ export default function GraphView({
   graph,
   onNodeSelect,
   highlightTimestamp,
+  maxTimestamp,
 }: GraphViewProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
@@ -362,6 +364,39 @@ export default function GraphView({
     } as any).run();
   }, [graph, getSpeakerColor, getNodeBorder]);
 
+  // Filter nodes by maxTimestamp (video-review mode: progressive graph reveal)
+  useEffect(() => {
+    const cy = cyRef.current;
+    if (!cy || !graph) return;
+
+    if (maxTimestamp == null) {
+      // No filtering — show everything
+      cy.nodes().forEach((n) => n.style("display", "element"));
+      cy.edges().forEach((e) => e.style("display", "element"));
+      return;
+    }
+
+    // Build set of visible node IDs based on timestamp
+    const visibleNodeIds = new Set<string>();
+    graph.nodes.forEach((node) => {
+      if (node.timestamp_start <= maxTimestamp) {
+        visibleNodeIds.add(node.id);
+      }
+    });
+
+    // Toggle node visibility
+    cy.nodes().forEach((cyNode) => {
+      cyNode.style("display", visibleNodeIds.has(cyNode.id()) ? "element" : "none");
+    });
+
+    // Toggle edge visibility — both endpoints must be visible
+    cy.edges().forEach((cyEdge) => {
+      const srcVisible = visibleNodeIds.has(cyEdge.source().id());
+      const tgtVisible = visibleNodeIds.has(cyEdge.target().id());
+      cyEdge.style("display", srcVisible && tgtVisible ? "element" : "none");
+    });
+  }, [maxTimestamp, graph]);
+
   // Highlight node at current audio timestamp
   useEffect(() => {
     const cy = cyRef.current;
@@ -369,21 +404,30 @@ export default function GraphView({
 
     cy.elements().removeClass("highlighted dimmed");
 
+    // Only consider visible nodes for highlighting
     const matchingNode = graph.nodes.find(
       (n) =>
+        (maxTimestamp == null || n.timestamp_start <= maxTimestamp) &&
         highlightTimestamp >= n.timestamp_start &&
         highlightTimestamp <= n.timestamp_end
     );
 
     if (matchingNode) {
       const cyNode = cy.getElementById(matchingNode.id);
-      if (cyNode.length > 0) {
+      if (cyNode.length > 0 && cyNode.style("display") !== "none") {
         cyNode.addClass("highlighted");
-        // Dim other nodes
-        cy.elements().not(cyNode).not(cyNode.connectedEdges()).addClass("dimmed");
+        // Dim other visible nodes
+        cy.nodes()
+          .filter((n) => n.style("display") !== "none")
+          .not(cyNode)
+          .addClass("dimmed");
+        cy.edges()
+          .filter((e) => e.style("display") !== "none")
+          .not(cyNode.connectedEdges())
+          .addClass("dimmed");
       }
     }
-  }, [highlightTimestamp, graph]);
+  }, [highlightTimestamp, maxTimestamp, graph]);
 
   return (
     <div className="relative w-full h-full">
