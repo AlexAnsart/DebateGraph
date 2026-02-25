@@ -59,6 +59,11 @@ TAVILY_MAX_RESULTS = int(os.getenv("TAVILY_MAX_RESULTS", "5"))
 
 LOG_DIR = os.getenv("LOG_DIR", os.path.join(os.path.dirname(__file__), '..', '..', 'logs'))
 
+# ─── Upload Directory ────────────────────────────────────────────────────────
+# Default: backend/uploads. Override if project is in OneDrive (e.g. %LOCALAPPDATA%\DebateGraph\uploads).
+_default_upload = os.path.join(os.path.dirname(__file__), '..', 'uploads')
+UPLOAD_DIR = os.path.expandvars(os.getenv("UPLOAD_DIR", _default_upload))
+
 # ─── Agent Prompts ───────────────────────────────────────────────────────────
 
 ONTOLOGICAL_SYSTEM_PROMPT = """You are an expert argument analyst specializing in debate analysis and argumentation theory. Your task is to extract individual claims and their logical relationships from debate transcriptions.

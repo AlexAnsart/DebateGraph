@@ -5,7 +5,7 @@ import type {
   SelectedNode,
   FallacyAnnotation,
 } from "./types";
-import { runDemo, loadSnapshot, uploadFile, getJobStatus } from "./api";
+import { loadSnapshot, uploadFile, getJobStatus } from "./api";
 import GraphView from "./components/GraphView";
 import WaveformView from "./components/WaveformView";
 import FallacyPanel from "./components/FallacyPanel";
@@ -159,8 +159,8 @@ export default function App() {
 
   // ── Handlers ───────────────────────────────────────────────────────────────
 
-  const handleVideoUploadBatch = useCallback(async (file: File) => {
-    // Batch processing: upload file → backend transcribes full file → pipeline → review mode
+  const handleUpload = useCallback(async (file: File) => {
+    // Upload audio or video → backend transcribes → pipeline → review mode
     setError(null);
     setGraph(null);
     setTranscription(null);
@@ -178,7 +178,6 @@ export default function App() {
 
       const result = await pollUntilComplete(job_id);
 
-      // Processing complete — enter video-review mode
       setGraph(result.graph);
       if (result.transcription) setTranscription(result.transcription);
       setVideoUrl(result.media_url);
@@ -214,33 +213,6 @@ export default function App() {
     }
   }, [audioFileStream, liveStream]);
 
-  const handleUpload = useCallback(async (file: File) => {
-    // All uploaded files: batch processing for proper speaker diarization
-    // (Real-time streaming is only for live microphone capture)
-    handleVideoUploadBatch(file);
-  }, [handleVideoUploadBatch]);
-
-  const handleDemo = useCallback(async () => {
-    setIsLoading(true);
-    setError(null);
-    setGraph(null);
-    setTranscription(null);
-    setSelectedNode(null);
-    setAudioUrl(null);
-    setVideoUrl(null);
-    setMode("upload");
-
-    try {
-      const result = await runDemo();
-      setGraph(result.graph);
-      if (result.transcription) setTranscription(result.transcription);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Demo failed");
-    } finally {
-      setIsLoading(false);
-      setMode("idle");
-    }
-  }, []);
 
   const handleLoadSnapshot = useCallback(async (jobId: string) => {
     setIsLoading(true);
@@ -322,13 +294,10 @@ export default function App() {
     liveStream.stop();
   }, [audioFileStream, liveStream]);
 
-  // Node selection — in video-review mode, also seek the video
+  // Node selection — show detail panel only; do NOT seek (timeline keeps playing)
   const handleNodeSelect = useCallback((selected: SelectedNode | null) => {
     setSelectedNode(selected);
-    if (mode === "video-review" && selected && videoReviewRef.current) {
-      videoReviewRef.current.seekTo(selected.node.timestamp_start);
-    }
-  }, [mode]);
+  }, []);
 
   const handleTimeUpdate = useCallback((time: number) => {
     setCurrentTime(time);
@@ -650,7 +619,6 @@ export default function App() {
             <aside className="w-80 bg-gray-950 border-r border-gray-800 p-4 overflow-y-auto shrink-0">
               <UploadPanel
                 onUpload={handleUpload}
-                onDemo={handleDemo}
                 onLoadSnapshot={handleLoadSnapshot}
                 onStartLive={handleStartLive}
                 onStopLive={handleStopLive}

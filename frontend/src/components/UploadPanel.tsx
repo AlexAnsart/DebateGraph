@@ -4,7 +4,6 @@ import type { JobMeta } from "../api";
 
 interface UploadPanelProps {
   onUpload: (file: File) => void;
-  onDemo: () => void;
   onLoadSnapshot: (jobId: string) => void;
   onStartLive: () => void;
   onStopLive: () => void;
@@ -12,13 +11,6 @@ interface UploadPanelProps {
   isLive: boolean;
   liveStats?: { nodes: number; chunks: number; duration: number; audioLevel: number };
 }
-
-const ACCEPTED_FORMATS = [
-  "audio/wav", "audio/mpeg", "audio/mp3", "audio/ogg",
-  "audio/flac", "audio/webm", "video/mp4", "video/webm", "video/ogg",
-  "video/x-matroska", "video/avi", "video/quicktime",
-  ".mp4", ".webm", ".avi", ".mkv", ".mov", ".m4v",
-];
 
 function formatDate(iso: string): string {
   if (!iso) return "—";
@@ -83,9 +75,15 @@ function VuMeter({ level }: { level: number }) {
   );
 }
 
+const ACCEPTED_FORMATS = [
+  "audio/wav", "audio/mpeg", "audio/mp3", "audio/ogg",
+  "audio/flac", "audio/webm", "video/mp4", "video/webm", "video/ogg",
+  "video/x-matroska", "video/avi", "video/quicktime",
+  ".mp4", ".webm", ".avi", ".mkv", ".mov", ".m4v",
+];
+
 export default function UploadPanel({
   onUpload,
-  onDemo,
   onLoadSnapshot,
   onStartLive,
   onStopLive,
@@ -96,11 +94,11 @@ export default function UploadPanel({
   const [isDragging, setIsDragging] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [jobs, setJobs] = useState<JobMeta[]>([]);
+  const inputRef = useRef<HTMLInputElement>(null);
   const [selectedJobId, setSelectedJobId] = useState<string>("");
   const [jobsLoading, setJobsLoading] = useState(false);
   const [jobsError, setJobsError] = useState<string | null>(null);
   const [showJobs, setShowJobs] = useState(false);
-  const inputRef = useRef<HTMLInputElement>(null);
 
   const fetchJobs = useCallback(async () => {
     setJobsLoading(true);
@@ -294,15 +292,6 @@ export default function UploadPanel({
               Analyzing…
             </span>
           ) : "Analyze"}
-        </button>
-        <button
-          onClick={onDemo}
-          disabled={isLoading}
-          className={`py-2.5 px-3 rounded-lg font-medium text-sm transition-all
-            ${isLoading ? "bg-gray-800 text-gray-500 cursor-not-allowed"
-              : "bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700"}`}
-        >
-          ⚡ Demo
         </button>
       </div>
 
