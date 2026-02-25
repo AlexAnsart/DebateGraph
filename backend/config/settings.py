@@ -64,6 +64,12 @@ LOG_DIR = os.getenv("LOG_DIR", os.path.join(os.path.dirname(__file__), '..', '..
 _default_upload = os.path.join(os.path.dirname(__file__), '..', 'uploads')
 UPLOAD_DIR = os.path.expandvars(os.getenv("UPLOAD_DIR", _default_upload))
 
+# ─── Demos Directory ──────────────────────────────────────────────────────────
+# Bundled demo media for remote deployment. Fallback when job media is not in UPLOAD_DIR.
+# Docker: ./demos is mounted at /app/demos.
+_default_demos = os.path.join(os.path.dirname(__file__), '..', '..', 'demos')
+DEMOS_DIR = os.path.expandvars(os.getenv("DEMOS_DIR", _default_demos))
+
 # ─── Agent Prompts ───────────────────────────────────────────────────────────
 
 ONTOLOGICAL_SYSTEM_PROMPT = """You are an expert argument analyst specializing in debate analysis and argumentation theory. Your task is to extract individual claims and their logical relationships from debate transcriptions.
