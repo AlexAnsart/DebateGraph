@@ -44,6 +44,9 @@ backend/temp/
 *.ogg
 *.flac
 
+# Demos: only the 1mn excerpt (override above)
+!demos/Extrait_Debat_Obama_Romney_1mn.mp4
+
 # Models cache
 models/
 *.pt
