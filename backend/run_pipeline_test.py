@@ -245,8 +245,8 @@ async def main():
     logger.info(f"  Edges:             {len(snapshot.edges)}")
     logger.info(f"  Fallacies:         {len(all_fallacies)}")
     logger.info(f"  Fact-checks:       {len(factchecked)}")
-    logger.info(f"  DB viewer:         http://localhost:8000/db")
-    logger.info(f"  Snapshot detail:   http://localhost:8000/db/snapshot/{job_id}")
+    logger.info(f"  DB viewer:         http://localhost:8010/db")
+    logger.info(f"  Snapshot detail:   http://localhost:8010/db/snapshot/{job_id}")
     logger.info("=" * 70)
 
     # ── DB verification ────────────────────────────────────────────────────

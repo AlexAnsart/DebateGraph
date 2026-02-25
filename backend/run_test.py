@@ -30,7 +30,7 @@ logging.basicConfig(
 )
 log = logging.getLogger("test")
 
-BASE_URL = "http://localhost:8000"
+BASE_URL = "http://localhost:8010"
 AUDIO_FILE = Path(__file__).parent.parent / "demos" / "obama_romney_10min.mp3"
 
 
@@ -187,8 +187,8 @@ def main():
     log.info("=" * 60)
     log.info("✅ ALL TESTS PASSED")
     log.info(f"Total time: {total_time:.0f}s ({total_time/60:.1f} min)")
-    log.info(f"DB Viewer:  http://localhost:8000/db")
-    log.info(f"Snapshot:   http://localhost:8000/db/snapshot/{job_id}")
+    log.info(f"DB Viewer:  http://localhost:8010/db")
+    log.info(f"Snapshot:   http://localhost:8010/db/snapshot/{job_id}")
     log.info("=" * 60)
 
 
