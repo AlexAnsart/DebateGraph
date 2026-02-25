@@ -5,7 +5,7 @@ import type {
   SelectedNode,
   FallacyAnnotation,
 } from "./types";
-import { uploadFile, runDemo, loadSnapshot } from "./api";
+import { runDemo, loadSnapshot } from "./api";
 import GraphView from "./components/GraphView";
 import WaveformView from "./components/WaveformView";
 import FallacyPanel from "./components/FallacyPanel";
@@ -16,8 +16,9 @@ import VideoPlayer from "./components/VideoPlayer";
 import { useLiveStream } from "./hooks/useLiveStream";
 import { useAudioCapture } from "./hooks/useAudioCapture";
 import { useVideoStream } from "./hooks/useVideoStream";
+import { useAudioFileStream } from "./hooks/useAudioFileStream";
 
-type AppMode = "idle" | "upload" | "live" | "video";
+type AppMode = "idle" | "upload" | "live" | "video" | "audio-stream";
 
 export default function App() {
   // ── State ──────────────────────────────────────────────────────────────────
@@ -78,6 +79,24 @@ export default function App() {
     }, [liveStream]),
   });
 
+  // ── Audio file streaming (real-time analysis of uploaded audio) ─────────────
+  const audioFileStream = useAudioFileStream({
+    chunkDurationMs: 15000,
+    onChunk: useCallback(
+      (chunk: ArrayBuffer, chunkIndex: number, timeOffset: number) => {
+        liveStream.sendChunk(chunk, chunkIndex, timeOffset);
+      },
+      [liveStream.sendChunk]
+    ),
+    onError: useCallback((err: string) => {
+      setError(err);
+    }, []),
+    onComplete: useCallback(() => {
+      // Audio file ended — finalize the stream
+      liveStream.stop();
+    }, [liveStream]),
+  });
+
   // ── Derived data ───────────────────────────────────────────────────────────
   const allFallacies = useMemo<FallacyAnnotation[]>(() => {
     if (!graph) return [];
@@ -86,7 +105,9 @@ export default function App() {
 
   const isLive = mode === "live" && audioCapture.state.isRecording;
   const isVideoMode = mode === "video";
+  const isAudioStreamMode = mode === "audio-stream";
   const isVideoPlaying = isVideoMode && videoStream.state.status === "playing";
+  const isAudioStreamPlaying = isAudioStreamMode && audioFileStream.state.status === "playing";
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
@@ -111,15 +132,39 @@ export default function App() {
     setVideoUrl(url);
 
     // Connect WebSocket for live streaming
+    // NOTE: Do NOT revert mode to "idle" on failure — keep video visible and show error inline
     try {
       liveStream.reset();
       await liveStream.connect();
     } catch (err) {
       const msg = err instanceof Error ? err.message : "Failed to connect streaming";
       setError(msg);
-      setMode("idle");
+      // Keep mode="video" so the video player stays visible
     }
   }, [videoStream, liveStream]);
+
+  const handleAudioStreamUpload = useCallback(async (file: File) => {
+    setError(null);
+    setGraph(null);
+    setTranscription(null);
+    setSelectedNode(null);
+    setVideoUrl(null);
+    setMode("audio-stream");
+
+    // Load audio file into the streaming player
+    const url = audioFileStream.loadAudioFile(file);
+    setAudioUrl(url);
+
+    // Connect WebSocket for live streaming
+    try {
+      liveStream.reset();
+      await liveStream.connect();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Failed to connect streaming";
+      setError(msg);
+      // Keep mode so user sees the error and can retry
+    }
+  }, [audioFileStream, liveStream]);
 
   const handleUpload = useCallback(async (file: File) => {
     // Check if it's a video file — use video mode
@@ -128,58 +173,9 @@ export default function App() {
       return;
     }
 
-    setIsLoading(true);
-    setError(null);
-    setGraph(null);
-    setTranscription(null);
-    setSelectedNode(null);
-    setVideoUrl(null);
-    setMode("upload");
-
-    try {
-      const url = URL.createObjectURL(file);
-      setAudioUrl(url);
-
-      const response = await uploadFile(file);
-
-      const pollStatus = async (jobId: string) => {
-        const maxAttempts = 180;
-        for (let i = 0; i < maxAttempts; i++) {
-          await new Promise((r) => setTimeout(r, 1000));
-          try {
-            const res = await fetch(`/api/status/${jobId}`);
-            const status = await res.json();
-
-            if (status.status === "complete" && status.graph) {
-              setGraph(status.graph);
-              if (status.transcription) setTranscription(status.transcription);
-              setIsLoading(false);
-              setMode("idle");
-              return;
-            }
-
-            if (status.status === "error") {
-              setError(status.error || "Analysis failed");
-              setIsLoading(false);
-              setMode("idle");
-              return;
-            }
-          } catch {
-            // Continue polling
-          }
-        }
-        setError("Analysis timed out");
-        setIsLoading(false);
-        setMode("idle");
-      };
-
-      pollStatus(response.job_id);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Upload failed");
-      setIsLoading(false);
-      setMode("idle");
-    }
-  }, [handleVideoUpload]);
+    // Use real-time streaming for audio files too
+    handleAudioStreamUpload(file);
+  }, [handleVideoUpload, handleAudioStreamUpload]);
 
   const handleDemo = useCallback(async () => {
     setIsLoading(true);
@@ -272,7 +268,21 @@ export default function App() {
 
   const handleVideoReady = useCallback((video: HTMLVideoElement) => {
     videoStream.onVideoReady(video);
-  }, [videoStream]);
+  }, [videoStream.onVideoReady]);
+
+  // Audio stream controls
+  const handleAudioStreamPlay = useCallback(() => {
+    audioFileStream.play();
+  }, [audioFileStream.play]);
+
+  const handleAudioStreamPause = useCallback(() => {
+    audioFileStream.pause();
+  }, [audioFileStream.pause]);
+
+  const handleAudioStreamStop = useCallback(async () => {
+    await audioFileStream.stop();
+    liveStream.stop();
+  }, [audioFileStream, liveStream]);
 
   const handleNodeSelect = useCallback((selected: SelectedNode | null) => {
     setSelectedNode(selected);
@@ -307,6 +317,13 @@ export default function App() {
       if (vs.status === "paused") return `Paused — ${liveStream.state.nodeCount} nodes`;
       if (vs.status === "complete") return "Video analysis complete";
     }
+    if (mode === "audio-stream") {
+      const as = audioFileStream.state;
+      if (as.status === "loading") return "Loading audio…";
+      if (as.status === "playing") return `Analyzing audio — ${liveStream.state.nodeCount} nodes`;
+      if (as.status === "paused") return `Paused — ${liveStream.state.nodeCount} nodes`;
+      if (as.status === "complete") return "Audio analysis complete";
+    }
     if (mode === "live") {
       const s = liveStream.state.status;
       if (s === "connecting") return "Connecting…";
@@ -318,7 +335,7 @@ export default function App() {
     if (isLoading) return "Analyzing…";
     if (graph) return `${graph.nodes.length} claims · ${graph.edges.length} relations · ${allFallacies.length} fallacies`;
     return null;
-  }, [mode, videoStream.state, liveStream.state.status, liveStream.state.nodeCount, liveStats.nodes, isLoading, graph, allFallacies.length]);
+  }, [mode, videoStream.state, audioFileStream.state, liveStream.state.status, liveStream.state.nodeCount, liveStats.nodes, isLoading, graph, allFallacies.length]);
 
   // ── Render ─────────────────────────────────────────────────────────────────
   return (
@@ -329,8 +346,8 @@ export default function App() {
           <h1 className="text-lg font-bold text-white tracking-tight">
             <span className="text-blue-400">Debate</span>Graph
           </h1>
-          <span className="text-xs text-gray-600 font-mono">v0.4</span>
-          {(mode === "live" || isVideoPlaying) && (
+          <span className="text-xs text-gray-600 font-mono">v0.5</span>
+          {(mode === "live" || isVideoPlaying || isAudioStreamPlaying) && (
             <span className="flex items-center gap-1.5 px-2 py-0.5 bg-red-900/30 border border-red-800 rounded-full text-xs text-red-400">
               <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
               LIVE
@@ -339,6 +356,11 @@ export default function App() {
           {isVideoMode && (
             <span className="flex items-center gap-1.5 px-2 py-0.5 bg-purple-900/30 border border-purple-800 rounded-full text-xs text-purple-400">
               VIDEO
+            </span>
+          )}
+          {isAudioStreamMode && (
+            <span className="flex items-center gap-1.5 px-2 py-0.5 bg-blue-900/30 border border-blue-800 rounded-full text-xs text-blue-400">
+              STREAMING
             </span>
           )}
         </div>
@@ -377,7 +399,7 @@ export default function App() {
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar — hidden in video mode unless fullscreen graph */}
+        {/* Left Sidebar — shown in idle, upload, live, audio-stream modes */}
         {(!isVideoMode || graphFullscreen) && (
           <aside className="w-80 bg-gray-950 border-r border-gray-800 p-4 overflow-y-auto shrink-0">
             <UploadPanel
@@ -390,6 +412,69 @@ export default function App() {
               isLive={isLive}
               liveStats={liveStats}
             />
+
+            {/* Audio stream controls */}
+            {isAudioStreamMode && (
+              <div className="mt-4 bg-blue-950/20 border border-blue-900/30 rounded-lg p-4">
+                <h3 className="text-xs font-semibold text-blue-400 uppercase tracking-wider mb-3">
+                  Real-time Audio Analysis
+                </h3>
+                <div className="flex items-center gap-2 mb-3">
+                  {/* Play/Pause */}
+                  <button
+                    onClick={audioFileStream.state.status === "playing" ? handleAudioStreamPause : handleAudioStreamPlay}
+                    className="w-10 h-10 flex items-center justify-center rounded-full bg-blue-600 hover:bg-blue-700 transition-colors"
+                    disabled={audioFileStream.state.status === "loading"}
+                  >
+                    {audioFileStream.state.status === "playing" ? (
+                      <svg className="w-5 h-5 text-white" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
+                      </svg>
+                    ) : (
+                      <svg className="w-5 h-5 text-white ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                        <path d="M8 5v14l11-7z" />
+                      </svg>
+                    )}
+                  </button>
+                  {/* Stop */}
+                  <button
+                    onClick={handleAudioStreamStop}
+                    className="w-10 h-10 flex items-center justify-center rounded-full bg-gray-700 hover:bg-gray-600 transition-colors"
+                  >
+                    <svg className="w-4 h-4 text-white" fill="currentColor" viewBox="0 0 24 24">
+                      <rect x="6" y="6" width="12" height="12" rx="1" />
+                    </svg>
+                  </button>
+                  {/* Time */}
+                  <span className="text-xs text-gray-400 font-mono ml-2">
+                    {Math.floor(audioFileStream.state.currentTime / 60)}:{Math.floor(audioFileStream.state.currentTime % 60).toString().padStart(2, "0")}
+                    {" / "}
+                    {Math.floor(audioFileStream.state.duration / 60)}:{Math.floor(audioFileStream.state.duration % 60).toString().padStart(2, "0")}
+                  </span>
+                </div>
+                {/* Progress bar */}
+                <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden mb-2">
+                  <div
+                    className="h-full bg-blue-500 transition-all duration-200"
+                    style={{
+                      width: audioFileStream.state.duration > 0
+                        ? `${(audioFileStream.state.currentTime / audioFileStream.state.duration) * 100}%`
+                        : "0%"
+                    }}
+                  />
+                </div>
+                <div className="flex justify-between text-xs text-gray-500">
+                  <span>{audioFileStream.state.chunkCount} chunks sent</span>
+                  <span>{liveStream.state.nodeCount} nodes</span>
+                </div>
+                {audioFileStream.state.status === "loading" && (
+                  <p className="text-xs text-gray-500 mt-2">Loading audio file…</p>
+                )}
+                {audioFileStream.state.status === "paused" && audioFileStream.state.duration > 0 && (
+                  <p className="text-xs text-blue-400 mt-2">Press play to start real-time analysis</p>
+                )}
+              </div>
+            )}
 
             {error && (
               <div className="mt-4 bg-red-950/30 border border-red-900/50 rounded-lg p-3 text-sm text-red-300">
@@ -516,7 +601,7 @@ export default function App() {
                 <GraphView
                   graph={graph}
                   onNodeSelect={handleNodeSelect}
-                  highlightTimestamp={currentTime}
+                  highlightTimestamp={isAudioStreamMode ? audioFileStream.state.currentTime : currentTime}
                 />
 
                 {selectedNode && (
@@ -525,6 +610,25 @@ export default function App() {
                       selected={selectedNode}
                       onClose={() => setSelectedNode(null)}
                     />
+                  </div>
+                )}
+
+                {/* Audio stream overlay — shows when streaming audio but no graph yet */}
+                {isAudioStreamMode && !graph && audioFileStream.state.status !== "idle" && (
+                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                    <div className="text-center">
+                      <div className="w-16 h-16 rounded-full bg-blue-900/20 border-2 border-blue-700 flex items-center justify-center mx-auto mb-4 animate-pulse">
+                        <svg className="w-8 h-8 text-blue-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+                        </svg>
+                      </div>
+                      <p className="text-gray-400 text-sm">
+                        {audioFileStream.state.status === "playing" ? "Analyzing audio…" : "Press play to start analysis"}
+                      </p>
+                      <p className="text-gray-600 text-xs mt-1">
+                        Graph builds in real-time as audio plays
+                      </p>
+                    </div>
                   </div>
                 )}
 

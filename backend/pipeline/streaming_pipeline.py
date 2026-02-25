@@ -44,35 +44,93 @@ logger = logging.getLogger("debategraph.streaming")
 
 # ─── Speaker tracking ────────────────────────────────────────────────────────
 
-class SpeakerTracker:
+class SpeakerReconciler:
     """
-    Tracks speaker turns across chunks.
-    Since gpt-4o-transcribe (non-diarized) doesn't identify speakers,
-    we use a simple heuristic: alternate speakers on long pauses,
-    or use the diarized model when available.
+    Reconciles speaker IDs across chunks.
+
+    OpenAI's diarized model assigns arbitrary speaker IDs per chunk
+    (e.g., SPEAKER_24, SPEAKER_83). We need to map them to consistent
+    canonical IDs (SPEAKER_00, SPEAKER_01, ...) across the whole stream.
+
+    Heuristic: within a chunk, speakers are numbered in order of appearance.
+    We map them to canonical IDs based on their position in the chunk and
+    continuity from the previous chunk's last speaker.
     """
     def __init__(self):
-        self.current_speaker = "SPEAKER_00"
-        self.speaker_index = 0
-        self.known_speakers: list[str] = ["SPEAKER_00"]
-        self.last_end_time = 0.0
+        # Map from raw per-chunk speaker IDs to canonical IDs
+        self._canonical_map: dict[str, str] = {}
+        # Canonical speakers in order of first appearance
+        self._canonical_speakers: list[str] = []
+        # Track which raw IDs appear in each chunk for ordering
+        self._chunk_raw_order: list[str] = []
+        self._last_canonical: str | None = None
 
-    def assign_speaker(self, segment: TranscriptionSegment, gap_threshold: float = 1.5) -> str:
-        """
-        Assign a speaker to a segment.
-        If there's a significant gap (>1.5s), assume speaker change.
-        """
-        gap = segment.start - self.last_end_time
-        if gap > gap_threshold and len(self.known_speakers) > 1:
-            # Rotate to next known speaker
-            self.speaker_index = (self.speaker_index + 1) % len(self.known_speakers)
-            self.current_speaker = self.known_speakers[self.speaker_index]
-        self.last_end_time = segment.end
-        return self.current_speaker
+    def reconcile(self, raw_speaker: str) -> str:
+        """Map a raw per-chunk speaker ID to a canonical speaker ID."""
+        if raw_speaker in self._canonical_map:
+            canonical = self._canonical_map[raw_speaker]
+            self._last_canonical = canonical
+            return canonical
 
-    def register_speaker(self, speaker: str):
-        if speaker not in self.known_speakers:
-            self.known_speakers.append(speaker)
+        # New raw speaker — assign canonical ID
+        if not self._canonical_speakers:
+            # First speaker ever
+            canonical = "SPEAKER_00"
+        elif self._last_canonical and len(self._canonical_speakers) == 1:
+            # Second speaker appears — they're definitely different
+            canonical = "SPEAKER_01"
+        else:
+            # Additional speaker — assign next canonical ID
+            idx = len(self._canonical_speakers)
+            canonical = f"SPEAKER_{idx:02d}"
+
+        self._canonical_map[raw_speaker] = canonical
+        if canonical not in self._canonical_speakers:
+            self._canonical_speakers.append(canonical)
+        self._last_canonical = canonical
+        return canonical
+
+    def start_new_chunk(self, chunk_speakers: list[str]) -> None:
+        """
+        Called at the start of each new chunk with the raw speaker IDs
+        found in that chunk (in order of appearance).
+
+        For chunks after the first, we try to map speakers based on
+        the assumption that chunks with 2 speakers usually have the same
+        2 canonical speakers, just with different raw IDs.
+        """
+        if not chunk_speakers:
+            return
+
+        # If we have 2 canonical speakers and 2 chunk speakers,
+        # map based on speaking order continuity
+        if len(self._canonical_speakers) >= 2 and len(chunk_speakers) >= 2:
+            # The first speaker in a new chunk is likely continuing from
+            # where the last chunk left off (or the other speaker responding)
+            first_raw = chunk_speakers[0]
+            second_raw = chunk_speakers[1] if len(chunk_speakers) > 1 else None
+
+            if first_raw not in self._canonical_map:
+                # Assign first speaker based on who spoke last
+                if self._last_canonical == self._canonical_speakers[0]:
+                    # Last chunk ended with SPEAKER_00, this chunk probably
+                    # starts with SPEAKER_01 (new turn) or SPEAKER_00 (continuation)
+                    # Default: treat new chunk first speaker as SPEAKER_00
+                    self._canonical_map[first_raw] = self._canonical_speakers[0]
+                else:
+                    self._canonical_map[first_raw] = self._canonical_speakers[1] if len(self._canonical_speakers) > 1 else self._canonical_speakers[0]
+
+            if second_raw and second_raw not in self._canonical_map:
+                # Second speaker is the other one
+                first_canonical = self._canonical_map.get(first_raw)
+                if first_canonical == self._canonical_speakers[0]:
+                    self._canonical_map[second_raw] = self._canonical_speakers[1]
+                else:
+                    self._canonical_map[second_raw] = self._canonical_speakers[0]
+
+    @property
+    def num_speakers(self) -> int:
+        return len(self._canonical_speakers)
 
 
 # ─── Streaming Pipeline ───────────────────────────────────────────────────────
@@ -106,6 +164,14 @@ class LiveStreamingPipeline:
         self.processed_segment_count = 0
         self.chunk_count = 0
         self.start_time = 0.0
+
+        # Speaker reconciliation across chunks
+        self._speaker_reconciler = SpeakerReconciler()
+
+        # Buffer for merging tiny chunks
+        self._leftover_bytes: bytes = b""
+        self._leftover_offset: float = 0.0
+        self._min_chunk_bytes = 2000  # Skip chunks smaller than 2KB
 
         # Agents (initialized lazily)
         self._ontological: Optional[OntologicalAgent] = None
@@ -169,6 +235,15 @@ class LiveStreamingPipeline:
             f"[{self.session_id}] Processing chunk {chunk_index} "
             f"({len(audio_bytes)/1024:.1f} KB, offset={time_offset:.1f}s)"
         )
+
+        # Skip tiny chunks (< 2KB) — they're too small for transcription
+        # and usually just silence or the tail end of a stream
+        if len(audio_bytes) < self._min_chunk_bytes:
+            logger.info(
+                f"[{self.session_id}] Chunk {chunk_index} too small "
+                f"({len(audio_bytes)} bytes < {self._min_chunk_bytes}), skipping"
+            )
+            return
 
         # Notify frontend: chunk received
         await self.on_update({
@@ -251,7 +326,10 @@ class LiveStreamingPipeline:
         Finalize the stream: wait for background tasks, compute rigor scores,
         persist to DB, return final snapshot.
         """
-        logger.info(f"[{self.session_id}] Finalizing stream...")
+        logger.info(
+            f"[{self.session_id}] Finalizing stream "
+            f"({self._speaker_reconciler.num_speakers} speakers reconciled)"
+        )
 
         await self.on_update({
             "type": "finalizing",
@@ -352,15 +430,28 @@ class LiveStreamingPipeline:
     def _parse_diarized_response(
         self, transcript, time_offset: float
     ) -> list[TranscriptionSegment]:
-        """Parse diarized_json response."""
+        """Parse diarized_json response with speaker reconciliation."""
         from pipeline.transcription import _normalize_speaker
         segments = []
+
         if hasattr(transcript, "segments") and transcript.segments:
+            # Collect raw speaker IDs in order of first appearance
+            raw_speakers_order = []
+            for seg in transcript.segments:
+                raw_sp = _normalize_speaker(getattr(seg, "speaker", "SPEAKER_00") or "SPEAKER_00")
+                if raw_sp not in raw_speakers_order:
+                    raw_speakers_order.append(raw_sp)
+
+            # Inform reconciler about this chunk's speakers
+            self._speaker_reconciler.start_new_chunk(raw_speakers_order)
+
             for seg in transcript.segments:
                 text = getattr(seg, "text", "").strip()
                 if not text or len(text.split()) < 3:
                     continue
-                speaker = _normalize_speaker(getattr(seg, "speaker", "SPEAKER_00") or "SPEAKER_00")
+                raw_speaker = _normalize_speaker(getattr(seg, "speaker", "SPEAKER_00") or "SPEAKER_00")
+                # Reconcile to canonical speaker ID
+                speaker = self._speaker_reconciler.reconcile(raw_speaker)
                 start = float(getattr(seg, "start", 0.0)) + time_offset
                 end = float(getattr(seg, "end", 0.0)) + time_offset
                 segments.append(TranscriptionSegment(
