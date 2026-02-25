@@ -17,7 +17,7 @@ import mimetypes
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from fastapi.responses import JSONResponse, FileResponse
 
-from config.settings import UPLOAD_DIR as UPLOAD_DIR_CFG
+from config.settings import UPLOAD_DIR as UPLOAD_DIR_CFG, DEMOS_DIR
 from api.models.schemas import (
     UploadResponse,
     AnalysisStatus,
@@ -43,19 +43,43 @@ router = APIRouter(prefix="/api", tags=["upload"])
 
 UPLOAD_DIR = Path(UPLOAD_DIR_CFG).resolve()
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+DEMOS_PATH = Path(DEMOS_DIR).resolve()
 
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".mp4", ".webm", ".ogg", ".flac", ".m4a", ".avi", ".mkv"}
 MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB
 
 
-def _has_media_file(job_id: str) -> bool:
-    """Check if an original (non-WAV) media file exists for this job in UPLOAD_DIR."""
+def _resolve_media_path(job_id: str) -> Path | None:
+    """
+    Resolve media file path: first check UPLOAD_DIR, then fall back to DEMOS_DIR
+    using job's source_path or audio_filename (for run_pipeline_test / demo jobs).
+    """
     matches = list(UPLOAD_DIR.glob(f"{job_id}.*"))
-    return any(m.suffix != ".wav" for m in matches)
+    originals = [m for m in matches if m.suffix != ".wav"] or matches
+    if originals:
+        return originals[0]
+
+    job = get_job(job_id)
+    if not job:
+        return None
+    source_path = job.get("source_path") or job.get("audio_filename")
+    if not source_path:
+        return None
+    # source_path may be "demos/obama_romney_10min.mp3" or "obama_romney_10min.mp3"
+    demo_filename = Path(source_path).name
+    demo_path = DEMOS_PATH / demo_filename
+    if demo_path.exists() and demo_path.suffix.lower() in {".mp3", ".mp4", ".webm", ".ogg", ".m4a", ".avi", ".mkv"}:
+        return demo_path
+    return None
+
+
+def _has_media_file(job_id: str) -> bool:
+    """Check if media file exists (uploads or demos fallback)."""
+    return _resolve_media_path(job_id) is not None
 
 
 def _get_media_url(job_id: str) -> str | None:
-    """Return the media URL for a job if the file exists in UPLOAD_DIR."""
+    """Return the media URL for a job if the file exists."""
     if _has_media_file(job_id):
         return f"/api/media/{job_id}"
     return None
@@ -65,13 +89,11 @@ def _get_media_url(job_id: str) -> str | None:
 
 @router.get("/media/{job_id}")
 async def serve_media(job_id: str):
-    """Serve the uploaded media file for video/audio playback."""
-    matches = list(UPLOAD_DIR.glob(f"{job_id}.*"))
-    originals = [m for m in matches if m.suffix != ".wav"] or matches
-    if not originals:
+    """Serve the media file for video/audio playback (uploads or demos fallback)."""
+    file_path = _resolve_media_path(job_id)
+    if not file_path:
         raise HTTPException(status_code=404, detail=f"Media file for job '{job_id}' not found")
 
-    file_path = originals[0]
     media_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
     return FileResponse(
         path=str(file_path),

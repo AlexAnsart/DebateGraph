@@ -86,7 +86,8 @@ async def main():
     logger.info(f"\n  Job ID: {job_id}")
 
     if create_job:
-        create_job(job_id, audio_filename=demo_audio.name)
+        # source_path enables media serving from demos/ on remote (no uploads/)
+        create_job(job_id, audio_filename=demo_audio.name, source_path=f"demos/{demo_audio.name}")
         logger.info("  ✓ Job created in DB")
 
     # ── Step 1: Transcription ──────────────────────────────────────────────
