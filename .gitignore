@@ -62,6 +62,8 @@ htmlcov/
 # Misc
 *.bak
 *.tmp
+# Windows reserved device name (must not be tracked)
+nul
 spec1.docx
 spec2.md
 .blackboxcli/

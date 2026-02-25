@@ -98,11 +98,13 @@ export default function UploadPanel({
   const [jobs, setJobs] = useState<JobMeta[]>([]);
   const [selectedJobId, setSelectedJobId] = useState<string>("");
   const [jobsLoading, setJobsLoading] = useState(false);
+  const [jobsError, setJobsError] = useState<string | null>(null);
   const [showJobs, setShowJobs] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const fetchJobs = useCallback(async () => {
     setJobsLoading(true);
+    setJobsError(null);
     try {
       const data = await listJobs();
       setJobs(data);
@@ -110,14 +112,14 @@ export default function UploadPanel({
         const firstComplete = data.find((j) => j.status === "complete");
         if (firstComplete) setSelectedJobId(firstComplete.id);
       }
-    } catch {
-      // DB might not be available
+    } catch (err) {
+      setJobsError(err instanceof Error ? err.message : "Failed to load jobs");
     } finally {
       setJobsLoading(false);
     }
   }, [selectedJobId]);
 
-  useEffect(() => { fetchJobs(); }, []);
+  useEffect(() => { fetchJobs(); }, [fetchJobs]);
 
   const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); };
   const handleDragLeave = () => setIsDragging(false);
@@ -331,6 +333,17 @@ export default function UploadPanel({
           <div className="bg-gray-950 p-3 space-y-3">
             {jobsLoading ? (
               <p className="text-xs text-gray-500 text-center py-3">Loading jobs…</p>
+            ) : jobsError ? (
+              <div className="text-center py-3 space-y-2">
+                <p className="text-xs text-red-400">{jobsError}</p>
+                <p className="text-xs text-gray-500">Check backend at :8010 and DB connection.</p>
+                <button
+                  onClick={fetchJobs}
+                  className="text-xs text-blue-400 hover:text-blue-300 underline"
+                >
+                  Retry
+                </button>
+              </div>
             ) : jobs.length === 0 ? (
               <p className="text-xs text-gray-500 text-center py-3">
                 No jobs in database yet.<br />
@@ -423,7 +436,7 @@ export default function UploadPanel({
 
       {/* DB Viewer link */}
       <a
-        href="http://localhost:8000/db"
+        href="http://localhost:8010/db"
         target="_blank"
         rel="noopener noreferrer"
         className="block w-full text-center py-2 px-4 rounded-lg text-xs text-gray-500 hover:text-gray-300 border border-gray-800 hover:border-gray-700 transition-all"

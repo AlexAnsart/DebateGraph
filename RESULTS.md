@@ -224,7 +224,7 @@ All graph data visible in frontend:
 
 ## DB Viewer
 
-Available at `http://localhost:8000/db`:
+Available at `http://localhost:8010/db`:
 - Jobs table with status badges, metadata, links to frontend and JSON viewer
 - Snapshots table with node/edge/fallacy/factcheck counts
 - Snapshot detail page (`/db/snapshot/{job_id}`) with:
@@ -266,7 +266,7 @@ Available at `http://localhost:8000/db`:
 
 ## How to Load a Graph in the Frontend
 
-1. Start the backend: `cd backend && python -m uvicorn main:app --host 0.0.0.0 --port 8000`
+1. Start the backend: `cd backend && python -m uvicorn main:app --host 0.0.0.0 --port 8010`
 2. Start the frontend: `cd frontend && npm run dev`
 3. Open `http://localhost:5173`
 4. In the left panel, click **"Load from Database"** to expand the job list
@@ -275,4 +275,4 @@ Available at `http://localhost:8000/db`:
 
 Alternatively, navigate directly to `http://localhost:5173/?job={job_id}` with a specific job ID.
 
-The DB viewer at `http://localhost:8000/db` provides a complete view of all data in the database with links to load graphs in the frontend.
+The DB viewer at `http://localhost:8010/db` provides a complete view of all data in the database with links to load graphs in the frontend.

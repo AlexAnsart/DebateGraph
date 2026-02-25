@@ -12,7 +12,7 @@ DebateGraph transforms audio/video debates into interactive argument graphs. It 
 docker-compose up -d
 
 Frontend: http://localhost:3000
-Backend: http://localhost:8000
+Backend: http://localhost:8010
 PostgreSQL: localhost:5432 (debategraph/debategraph)
 Redis: localhost:6379
 
@@ -23,13 +23,13 @@ Backend (full stack: FastAPI + WhisperX + sentence-transformers, etc.):
 cd backend
 venv\Scripts\activate
 pip install -r requirements.txt
-python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+python -m uvicorn main:app --host 0.0.0.0 --port 8010 --reload
 ```
 **Windows — full stack without a C compiler:** Use **Python 3.12** (not 3.13). Under 3.13, numpy has no wheel and would need a build; WhisperX/pyannote expect numpy 1.x. Create the venv with 3.12, then use the venv Python so pip and the reload subprocess use it:
 ```powershell
 # In backend\, with Python 3.12 on PATH (e.g. py -3.12 -m venv venv if you have both):
 .\venv\Scripts\python.exe -m pip install -r requirements.txt
-.\venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+.\venv\Scripts\python.exe -m uvicorn main:app --host 0.0.0.0 --port 8010 --reload
 # Or: .\run.ps1
 ```
 If you stay on Python 3.13 and don't install Build Tools, use `requirements-core.txt` to run the app (demo mode, API) without WhisperX.
@@ -99,7 +99,7 @@ Docker is used to **containerize and orchestrate** the three services that make 
 
 | Container | Role |
 |-----------|------|
-| **backend** | FastAPI Python application — runs the analysis pipeline (transcription, agents, graph). Built from `backend/Dockerfile`. Exposes port 8000. |
+| **backend** | FastAPI Python application — runs the analysis pipeline (transcription, agents, graph). Built from `backend/Dockerfile`. Exposes port 8010. |
 | **frontend** | React/Vite application — serves the interactive UI. Built from `frontend/Dockerfile`. Exposes port 3000. |
 | **redis** | Redis 7 (Alpine) — in-memory message broker reserved for **future real-time features** (Phase 3: WebSocket pub/sub for live streaming analysis). Currently provisioned but not actively used by the pipeline. |
 | **postgres** | PostgreSQL 16 — database for persistent storage of jobs, claims, relations, fallacies, fact-checks, and LLM audit trails. |
@@ -185,7 +185,7 @@ docker-compose up -d
 
 **Services:**
 - **Frontend**: http://localhost:3000
-- **Backend**: http://localhost:8000
+- **Backend**: http://localhost:8010
 - **PostgreSQL**: localhost:5432 (`debategraph` / `debategraph`)
 - **Redis**: localhost:6379
 
@@ -243,11 +243,11 @@ python main.py
 Or using uvicorn with hot-reload (use `python -m uvicorn` on Windows so the reload subprocess uses the venv):
 ```
 bash
-python -m uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+python -m uvicorn main:app --host 0.0.0.0 --port 8010 --reload
 ```
 **Windows troubleshooting:** If you see "Defaulting to user installation" or `ModuleNotFoundError` in the reload process, use the venv Python explicitly: `.\venv\Scripts\python.exe -m pip install -r requirements.txt` then `.\venv\Scripts\python.exe -m uvicorn ...`. If you get **"ffmpeg not found"** on upload, install the bundled ffmpeg with the same Python that runs the server: `.\venv\Scripts\python.exe -m pip install imageio-ffmpeg` (so it installs into the venv, not user site-packages). For full stack (WhisperX) without a C compiler, use Python 3.12. If you are on 3.13 and cannot install Build Tools, use `requirements-core.txt` to run the backend without WhisperX (demo mode still works).
 
-The backend will start at **http://localhost:8000**
+The backend will start at **http://localhost:8010**
 
 **4. In another terminal, set up and start the frontend:**
 
