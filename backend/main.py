@@ -20,8 +20,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
-# Load environment variables (override=True to replace empty system env vars)
-load_dotenv(override=True)
+# Load .env from project root (parent of backend/)
+_env_path = Path(__file__).resolve().parent.parent / ".env"
+load_dotenv(_env_path, override=True)
 
 # Configure logging
 logging.basicConfig(
@@ -52,12 +53,10 @@ async def lifespan(app: FastAPI):
 
     # Initialize PostgreSQL tables
     if os.getenv("DATABASE_URL"):
-        try:
-            from db.database import init_db
-            init_db()
+        from db.database import init_db
+        if init_db():
             logger.info("PostgreSQL: ready")
-        except Exception as e:
-            logger.error(f"PostgreSQL init failed: {e}")
+        else:
             logger.warning("Continuing without database persistence")
     else:
         logger.warning("DATABASE_URL not set — jobs will not be persisted")
@@ -125,9 +124,11 @@ async def run_demo():
 @app.get("/api/health")
 async def health_check():
     """Health check endpoint."""
+    from db.database import db_available
     return {
         "status": "healthy",
         "version": "0.2.0",
+        "database_available": db_available,
         "whisper_available": _check_whisper(),
         "anthropic_configured": bool(os.getenv("ANTHROPIC_API_KEY")),
         "tavily_configured": bool(os.getenv("TAVILY_API_KEY")),

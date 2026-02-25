@@ -441,7 +441,7 @@ REDIS_URL=redis://localhost:6379
 
 # ─── Backend ────────────────────────────────────────────────
 BACKEND_HOST=0.0.0.0
-BACKEND_PORT=8000
+BACKEND_PORT=8010
 CORS_ORIGINS=http://localhost:5173
 
 # ─── Whisper ────────────────────────────────────────────────

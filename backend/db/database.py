@@ -20,6 +20,9 @@ from psycopg2.extensions import connection as PgConnection
 
 logger = logging.getLogger("debategraph.db")
 
+# Set to True only when init_db succeeds. When False, all DB functions return empty/default.
+db_available = False
+
 # ─── DDL ────────────────────────────────────────────────────────────────────
 
 _CREATE_JOBS = """
@@ -68,8 +71,10 @@ def get_connection() -> PgConnection:
     return conn
 
 
-def init_db() -> None:
-    """Create tables if they don't exist. Called at application startup."""
+def init_db() -> bool:
+    """Create tables if they don't exist. Called at application startup.
+    Returns True on success, False on failure (DB unavailable)."""
+    global db_available
     try:
         conn = get_connection()
         with conn:
@@ -77,18 +82,25 @@ def init_db() -> None:
                 cur.execute(_CREATE_JOBS)
                 cur.execute(_CREATE_SNAPSHOTS)
         conn.close()
+        db_available = True
         logger.info("PostgreSQL: tables initialized (jobs, graph_snapshots)")
+        return True
     except Exception as e:
         logger.error(f"PostgreSQL init failed: {e}")
-        raise
+        db_available = False
+        return False
 
 
 # ─── Job CRUD ────────────────────────────────────────────────────────────────
 
 def create_job(job_id: str, audio_filename: str = None) -> None:
     """Insert a new job row with status='processing'."""
-    conn = get_connection()
+    if not db_available:
+        logger.debug("DB unavailable: skipping create_job")
+        return
+    conn = None
     try:
+        conn = get_connection()
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -100,8 +112,11 @@ def create_job(job_id: str, audio_filename: str = None) -> None:
                     (job_id, audio_filename),
                 )
         logger.debug(f"DB: created job {job_id}")
+    except psycopg2.OperationalError as e:
+        logger.warning(f"DB unavailable: {e}")
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 def update_job_status(
@@ -112,8 +127,12 @@ def update_job_status(
     duration_s: float = None,
 ) -> None:
     """Update job status, progress, error, and/or duration."""
-    conn = get_connection()
+    if not db_available:
+        logger.debug("DB unavailable: skipping update_job_status")
+        return
+    conn = None
     try:
+        conn = get_connection()
         with conn:
             with conn.cursor() as cur:
                 fields = ["status = %s"]
@@ -133,20 +152,30 @@ def update_job_status(
                     values,
                 )
         logger.debug(f"DB: updated job {job_id} → status={status}, progress={progress}")
+    except psycopg2.OperationalError as e:
+        logger.warning(f"DB unavailable: {e}")
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 def get_job(job_id: str) -> Optional[dict]:
     """Fetch a single job row as a dict."""
-    conn = get_connection()
+    if not db_available:
+        return None
+    conn = None
     try:
+        conn = get_connection()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute("SELECT * FROM jobs WHERE id = %s", (job_id,))
             row = cur.fetchone()
             return dict(row) if row else None
+    except psycopg2.OperationalError as e:
+        logger.warning(f"DB unavailable: {e}")
+        return None
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 def list_jobs() -> list[dict]:
@@ -154,8 +183,11 @@ def list_jobs() -> list[dict]:
     List all jobs with snapshot metadata (num_nodes, num_edges, speakers).
     Returns newest first.
     """
-    conn = get_connection()
+    if not db_available:
+        return []
+    conn = None
     try:
+        conn = get_connection()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
@@ -186,20 +218,31 @@ def list_jobs() -> list[dict]:
                     d["created_at"] = d["created_at"].isoformat()
                 result.append(d)
             return result
+    except psycopg2.OperationalError as e:
+        logger.warning(f"DB unavailable: {e}")
+        return []
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 def delete_job(job_id: str) -> bool:
     """Delete a job (cascades to snapshot)."""
-    conn = get_connection()
+    if not db_available:
+        return False
+    conn = None
     try:
+        conn = get_connection()
         with conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM jobs WHERE id = %s", (job_id,))
                 return cur.rowcount > 0
+    except psycopg2.OperationalError as e:
+        logger.warning(f"DB unavailable: {e}")
+        return False
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 # ─── Snapshot CRUD ───────────────────────────────────────────────────────────
@@ -230,8 +273,12 @@ def save_snapshot(
     )
     speakers = list(set(n.get("speaker", "") for n in nodes if n.get("speaker")))
 
-    conn = get_connection()
+    if not db_available:
+        logger.debug("DB unavailable: skipping save_snapshot")
+        return snapshot_id
+    conn = None
     try:
+        conn = get_connection()
         with conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -258,8 +305,12 @@ def save_snapshot(
             f"({num_nodes} nodes, {num_edges} edges, {num_fallacies} fallacies)"
         )
         return snapshot_id
+    except psycopg2.OperationalError as e:
+        logger.warning(f"DB unavailable: {e}")
+        return snapshot_id
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 def get_snapshot(job_id: str) -> Optional[dict]:
@@ -267,8 +318,11 @@ def get_snapshot(job_id: str) -> Optional[dict]:
     Load the graph snapshot for a given job_id.
     Returns dict with 'snapshot_json' and 'transcription_json' keys.
     """
-    conn = get_connection()
+    if not db_available:
+        return None
+    conn = None
     try:
+        conn = get_connection()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
@@ -290,16 +344,23 @@ def get_snapshot(job_id: str) -> Optional[dict]:
             if d.get("job_created_at"):
                 d["job_created_at"] = d["job_created_at"].isoformat()
             return d
+    except psycopg2.OperationalError as e:
+        logger.warning(f"DB unavailable: {e}")
+        return None
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 
 def get_all_snapshots_meta() -> list[dict]:
     """
     Return metadata for all snapshots (for the DB viewer).
     """
-    conn = get_connection()
+    if not db_available:
+        return []
+    conn = None
     try:
+        conn = get_connection()
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             cur.execute(
                 """
@@ -327,5 +388,9 @@ def get_all_snapshots_meta() -> list[dict]:
                     d["created_at"] = d["created_at"].isoformat()
                 result.append(d)
             return result
+    except psycopg2.OperationalError as e:
+        logger.warning(f"DB unavailable: {e}")
+        return []
     finally:
-        conn.close()
+        if conn:
+            conn.close()
