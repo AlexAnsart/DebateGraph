@@ -122,7 +122,7 @@ export async function listJobs(): Promise<JobMeta[]> {
 /**
  * Load a specific graph snapshot from the database by job ID.
  */
-export async function loadSnapshot(jobId: string): Promise<DemoResponse & { job_id: string; audio_filename?: string }> {
+export async function loadSnapshot(jobId: string): Promise<DemoResponse & { job_id: string; audio_filename?: string; media_url?: string }> {
   const response = await fetch(`${BASE_URL}/snapshot/${jobId}`);
   if (!response.ok) {
     if (response.status === 404) {

@@ -55,9 +55,9 @@ export default function VideoPlayer({
   const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
 
   return (
-    <div className="flex flex-col h-full bg-black">
+    <div className="flex flex-col h-full bg-gray-950">
       {/* Video element */}
-      <div className="flex-1 relative flex items-center justify-center overflow-hidden">
+      <div className="flex-1 relative flex items-center justify-center overflow-hidden bg-black/80">
         <video
           ref={videoElRef}
           src={videoUrl}
@@ -65,9 +65,18 @@ export default function VideoPlayer({
           onEnded={onEnded}
           className="max-w-full max-h-full object-contain"
           playsInline
-          // muted initially — audio is captured via AudioContext
-          // We connect to audioCtx.destination so user hears it
+          preload="auto"
         />
+
+        {/* Overlay: waiting state when video is loaded but not yet playing */}
+        {!isPlaying && duration > 0 && (
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-1.5 bg-gray-900/80 border border-gray-700 rounded-full text-xs text-gray-300 backdrop-blur-sm pointer-events-none">
+            <svg className="w-3.5 h-3.5 text-blue-400" fill="currentColor" viewBox="0 0 24 24">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            Press play to start analysis
+          </div>
+        )}
 
         {/* Overlay: LIVE analysis indicator */}
         {isPlaying && (

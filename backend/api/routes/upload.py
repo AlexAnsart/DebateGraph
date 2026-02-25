@@ -10,8 +10,10 @@ import asyncio
 import logging
 from pathlib import Path
 
+import mimetypes
+
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 
 from api.models.schemas import (
     UploadResponse,
@@ -41,6 +43,40 @@ UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 
 ALLOWED_EXTENSIONS = {".mp3", ".wav", ".mp4", ".webm", ".ogg", ".flac", ".m4a", ".avi", ".mkv"}
 MAX_FILE_SIZE = 500 * 1024 * 1024  # 500 MB
+
+
+def _has_media_file(job_id: str) -> bool:
+    """Check if an original (non-WAV) media file exists for this job."""
+    matches = list(UPLOAD_DIR.glob(f"{job_id}.*"))
+    return any(m.suffix != ".wav" for m in matches)
+
+
+def _get_media_url(job_id: str) -> str | None:
+    """Return the media URL for a job if the file exists on disk."""
+    if _has_media_file(job_id):
+        return f"/api/media/{job_id}"
+    return None
+
+
+# ─── Media serving ───────────────────────────────────────────
+
+@router.get("/media/{job_id}")
+async def serve_media(job_id: str):
+    """Serve the uploaded media file for video/audio playback."""
+    matches = list(UPLOAD_DIR.glob(f"{job_id}.*"))
+    # Prefer original format over .wav conversion
+    originals = [m for m in matches if m.suffix != ".wav"] or matches
+    if not originals:
+        raise HTTPException(status_code=404, detail=f"Media file for job '{job_id}' not found")
+
+    file_path = originals[0]
+    media_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+
+    return FileResponse(
+        path=str(file_path),
+        media_type=media_type,
+        filename=file_path.name,
+    )
 
 
 # ─── Upload ──────────────────────────────────────────────────
@@ -156,6 +192,7 @@ async def get_job_status(job_id: str):
         "error": job.get("error"),
         "graph": None,
         "transcription": None,
+        "media_url": None,
     }
 
     # If complete, load snapshot from DB
@@ -164,6 +201,7 @@ async def get_job_status(job_id: str):
         if snap:
             response["graph"] = snap["snapshot_json"]
             response["transcription"] = snap.get("transcription_json")
+        response["media_url"] = _get_media_url(job_id)
 
     return JSONResponse(content=response)
 
@@ -204,6 +242,7 @@ async def load_latest_snapshot():
         "created_at": latest_job.get("created_at"),
         "graph": snap["snapshot_json"],
         "transcription": snap.get("transcription_json"),
+        "media_url": _get_media_url(latest_job["id"]),
         "meta": {
             "num_nodes": snap["num_nodes"],
             "num_edges": snap["num_edges"],
@@ -246,6 +285,7 @@ async def load_snapshot(job_id: str):
         "created_at": snap.get("job_created_at"),
         "graph": snap["snapshot_json"],
         "transcription": snap.get("transcription_json"),
+        "media_url": _get_media_url(job_id),
         "meta": {
             "num_nodes": snap["num_nodes"],
             "num_edges": snap["num_edges"],

@@ -127,6 +127,7 @@ export interface AnalysisStatus {
   transcription: TranscriptionResult | null;
   graph: GraphSnapshot | null;
   error: string | null;
+  media_url?: string | null;
 }
 
 export interface DemoResponse {
