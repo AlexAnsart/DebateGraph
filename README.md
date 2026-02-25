@@ -1,6 +1,6 @@
 # DebateGraph
 
-[![Demo](https://img.youtube.com/vi/OLeKVoySgz4/maxresdefault.jpg)](https://youtu.be/OLeKVoySgz4)
+[![Demo](https://img.youtube.com/vi/wOrEW13l140/maxresdefault.jpg)](https://youtu.be/wOrEW13l140)
 
 **Real-time argumentative analysis** — turn debates (audio/video) into an interactive argument graph with claim extraction, fallacy detection, and fact-checking.
 
