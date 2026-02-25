@@ -20,8 +20,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 
-# Load environment variables
-load_dotenv()
+# Load environment variables (override=True to replace empty system env vars)
+load_dotenv(override=True)
 
 # Configure logging
 logging.basicConfig(
@@ -118,60 +118,6 @@ async def run_demo():
         "transcription": transcription.model_dump(mode="json"),
         "graph": snapshot.model_dump(mode="json"),
     })
-
-
-# ─── Snapshot Endpoint ──────────────────────────────────────
-
-@app.get("/api/snapshot/latest")
-async def get_latest_snapshot():
-    """
-    Return the most recent completed analysis snapshot from the database.
-    Falls back to JSON file if DB is unavailable.
-    """
-    import json
-
-    # Try DB first
-    if os.getenv("DATABASE_URL"):
-        try:
-            from db.database import list_jobs, get_snapshot
-            jobs = list_jobs()
-            completed = [j for j in jobs if j.get("status") == "complete"]
-            if completed:
-                latest_job = completed[0]  # already sorted newest first
-                snap = get_snapshot(latest_job["id"])
-                if snap:
-                    return JSONResponse(content={
-                        "status": "complete",
-                        "job_id": latest_job["id"],
-                        "audio_filename": latest_job.get("audio_filename"),
-                        "graph": snap["snapshot_json"],
-                        "transcription": snap.get("transcription_json"),
-                    })
-        except Exception as e:
-            logger.error(f"DB snapshot lookup failed: {e}")
-
-    # Fallback: check for JSON file
-    snapshot_paths = [
-        Path("..") / "logs" / "e2e_test_snapshot.json",
-        Path("logs") / "e2e_test_snapshot.json",
-    ]
-    for snapshot_path in snapshot_paths:
-        if snapshot_path.exists():
-            try:
-                with open(snapshot_path, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                return JSONResponse(content={
-                    "status": "complete",
-                    "graph": data,
-                    "source": str(snapshot_path),
-                })
-            except Exception as e:
-                logger.error(f"Failed to load snapshot from {snapshot_path}: {e}")
-
-    return JSONResponse(
-        status_code=404,
-        content={"status": "not_found", "message": "No pre-computed snapshot available. Upload a file or run the demo."},
-    )
 
 
 # ─── Health Check ────────────────────────────────────────────
