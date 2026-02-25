@@ -156,7 +156,7 @@ if __name__ == "__main__":
     import uvicorn
 
     host = os.getenv("BACKEND_HOST", "0.0.0.0")
-    port = int(os.getenv("BACKEND_PORT", "8020"))
+    port = int(os.getenv("BACKEND_PORT", "8010"))
 
     uvicorn.run(
         "main:app",
