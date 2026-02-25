@@ -6,7 +6,7 @@ All LLM prompts, model settings, and pipeline parameters are configured here.
 import os
 from dotenv import load_dotenv
 
-load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'))
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '..', '.env'), override=True)
 
 # ─── LLM Model Configuration ────────────────────────────────────────────────
 
