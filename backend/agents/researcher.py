@@ -6,9 +6,10 @@ then uses Claude to synthesize a verdict from search results.
 
 import os
 import json
+import time
 import asyncio
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from api.models.schemas import (
     FactCheckResult,
@@ -26,6 +27,9 @@ from config.settings import (
     RESEARCHER_SYSTEM_PROMPT,
     RESEARCHER_VERDICT_PROMPT,
 )
+
+if TYPE_CHECKING:
+    from session_log.session_structured_logger import SessionLogger
 
 logger = logging.getLogger("debategraph.researcher")
 
@@ -51,10 +55,11 @@ class ResearcherAgent:
     2. Uses Claude to synthesize a verdict from search results
     """
 
-    def __init__(self):
+    def __init__(self, session_logger: Optional["SessionLogger"] = None):
         self.tavily_client = None
         self.llm_client = None
-        
+        self._session_logger = session_logger
+
         if TAVILY_AVAILABLE:
             api_key = os.getenv("TAVILY_API_KEY", "")
             if api_key:
@@ -105,8 +110,13 @@ class ResearcherAgent:
                     explanation=f"Fact-check error: {str(result)}",
                 )
             graph_store.add_factcheck(result)
+            if self._session_logger:
+                self._session_logger.log_factcheck_added(
+                    factcheck_data=result.model_dump(mode="json"),
+                    source="researcher",
+                )
             valid_results.append(result)
-            
+
             logger.info(
                 f"  [{result.claim_id}] {result.verdict.value} "
                 f"(confidence={result.confidence:.2f}): {result.explanation[:80]}..."
@@ -177,6 +187,7 @@ class ResearcherAgent:
     ) -> FactCheckResult:
         """Use Claude to synthesize a verdict from search results."""
         try:
+            t0 = time.perf_counter()
             message = await asyncio.to_thread(
                 self.llm_client.messages.create,
                 model=LLM_MODEL,
@@ -194,8 +205,27 @@ class ResearcherAgent:
                     }
                 ],
             )
-
+            duration = time.perf_counter() - t0
             response_text = message.content[0].text
+            if self._session_logger:
+                usage = None
+                if getattr(message, "usage", None):
+                    usage = {"input_tokens": getattr(message.usage, "input_tokens", None), "output_tokens": getattr(message.usage, "output_tokens", None)}
+                self._session_logger.log_llm_call(
+                    provider="anthropic",
+                    model=LLM_MODEL,
+                    role="researcher_factcheck_verdict",
+                    system_prompt=RESEARCHER_SYSTEM_PROMPT,
+                    user_content=RESEARCHER_VERDICT_PROMPT.format(
+                        claim_text=claim.text,
+                        speaker=claim.speaker,
+                        search_results=search_results,
+                    ),
+                    response_text=response_text,
+                    usage=usage,
+                    duration_seconds=round(duration, 3),
+                    extra={"claim_id": claim.id},
+                )
             data = self._safe_parse_json(response_text)
 
             verdict_str = data.get("verdict", "unverifiable")

@@ -8,7 +8,7 @@ import anthropic
 client = anthropic.Anthropic()
 
 models_to_try = [
-    "claude-haiku-4-5",
+    "claude-haiku-4-5",  # primary
     "claude-3-5-haiku-latest",
     "claude-3-haiku-20240307",
     "claude-sonnet-4-20250514",
