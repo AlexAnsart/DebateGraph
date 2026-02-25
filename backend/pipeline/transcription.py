@@ -5,8 +5,13 @@ Provides high-quality speech-to-text with built-in speaker diarization.
 Model: gpt-4o-transcribe-diarize
 - Transcription + speaker diarization in one API call
 - Returns diarized_json with speaker labels, start/end timestamps
-- Requires chunking_strategy="auto" for audio > 30 seconds
-- File limit: 25 MB (mp3, mp4, wav, webm, etc.)
+- Chunking: for audio > ~2 min or > 25 MB we split into 2-min chunks to avoid 500/timeouts
+- File limit: 25 MB per request; long audio must be sent in chunks
+
+Real-time / streaming: For true real-time diarization (e.g. live mic or stream),
+OpenAI's Realtime API (WebSocket) supports transcription-only sessions with
+gpt-4o-transcribe / gpt-4o-transcribe-diarize and delta events. See:
+https://platform.openai.com/docs/guides/realtime-transcription
 """
 
 import os
@@ -66,11 +71,18 @@ def transcribe_audio(
     file_size_mb = file_path.stat().st_size / (1024 * 1024)
     logger.info(f"Transcribing: {file_path.name} ({file_size_mb:.1f} MB)")
 
-    if file_size_mb > 25:
-        logger.warning(f"File is {file_size_mb:.1f} MB (limit 25 MB). Will attempt chunked transcription.")
+    # OpenAI requires chunking for gpt-4o-transcribe-diarize when audio > 30s; large single requests often 500.
+    # Use chunked transcription for: size > 25 MB OR estimated duration > 2 min (safe threshold).
+    CHUNK_SIZE_MB = 25
+    CHUNK_DURATION_ESTIMATE_MIN = 2  # assume ~1 MB per min for WAV; use chunked if we might exceed safe length
+    use_chunked = file_size_mb > CHUNK_SIZE_MB or file_size_mb > (CHUNK_DURATION_ESTIMATE_MIN * 1.5)
+    if use_chunked:
+        logger.info(
+            f"File {file_size_mb:.1f} MB exceeds safe single-request size/duration. Using chunked transcription."
+        )
         return _transcribe_chunked(audio_path, api_key, language)
 
-    # Try diarized transcription first
+    # Try diarized transcription first (single request)
     try:
         return _transcribe_diarized(audio_path, api_key, language)
     except Exception as e:
@@ -226,27 +238,34 @@ def _transcribe_chunked(
     language: Optional[str] = None,
 ) -> TranscriptionResult:
     """
-    Handle files > 25 MB by splitting into chunks using pydub.
-    Each chunk is transcribed separately, then results are merged.
+    Split audio into short chunks (2 min), transcribe each with diarization, then merge.
+    Avoids 500 errors and timeouts from sending long audio in one request.
+    OpenAI recommends chunking for gpt-4o-transcribe-diarize when input > 30 seconds.
     """
     try:
         from pydub import AudioSegment
     except ImportError:
         raise RuntimeError("pydub required for chunked transcription. pip install pydub")
 
-    logger.info("Splitting large audio file into chunks...")
+    # pydub looks for ffmpeg in PATH; we inject our path (imageio-ffmpeg or system) so export() works
+    from utils.audio import get_ffmpeg_path
+    AudioSegment.converter = get_ffmpeg_path()
+
+    logger.info("Splitting audio into chunks for safe API requests...")
 
     audio = AudioSegment.from_file(audio_path)
-    chunk_duration_ms = 10 * 60 * 1000  # 10 minutes per chunk
+    # 2 minutes per chunk: keeps each request well under limits and avoids 500/timeouts
+    chunk_duration_ms = 2 * 60 * 1000
     chunks = []
 
     for i in range(0, len(audio), chunk_duration_ms):
         chunk = audio[i:i + chunk_duration_ms]
-        chunk_path = f"{audio_path}.chunk_{i // chunk_duration_ms}.mp3"
+        chunk_idx = i // chunk_duration_ms
+        chunk_path = f"{audio_path}.chunk_{chunk_idx}.mp3"
         chunk.export(chunk_path, format="mp3")
         chunks.append((chunk_path, i / 1000.0))  # (path, offset_seconds)
 
-    logger.info(f"Split into {len(chunks)} chunks")
+    logger.info(f"Split into {len(chunks)} chunks (~2 min each)")
 
     all_segments = []
     speakers_seen = set()

@@ -6,9 +6,10 @@ Uses configurable prompts from config/settings.py.
 
 import os
 import json
+import time
 import asyncio
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from api.models.schemas import (
     FallacyAnnotation,
@@ -29,6 +30,9 @@ from config.settings import (
     SKEPTIC_DETECTION_PROMPT,
 )
 
+if TYPE_CHECKING:
+    from session_log.session_structured_logger import SessionLogger
+
 logger = logging.getLogger("debategraph.skeptic")
 
 try:
@@ -44,9 +48,10 @@ class SkepticAgent:
     of structural analysis and LLM-based detection.
     """
 
-    def __init__(self):
+    def __init__(self, session_logger: Optional["SessionLogger"] = None):
         self.client = None
         self.model = LLM_MODEL
+        self._session_logger = session_logger
         if ANTHROPIC_AVAILABLE:
             api_key = os.getenv("ANTHROPIC_API_KEY", "")
             if api_key:
@@ -63,6 +68,13 @@ class SkepticAgent:
         # 1. Structural detection (always runs, no API needed)
         structural = self._detect_structural_fallacies(graph_store)
         all_fallacies.extend(structural)
+        for f in structural:
+            graph_store.add_fallacy(f)
+            if self._session_logger:
+                self._session_logger.log_fallacy_added(
+                    fallacy_data=f.model_dump(mode="json"),
+                    source="skeptic_structural",
+                )
         logger.info(f"Structural detection found {len(structural)} fallacies")
 
         # 2. LLM-based detection
@@ -72,6 +84,12 @@ class SkepticAgent:
             for f in llm_fallacies:
                 if (f.claim_id, f.fallacy_type) not in existing:
                     all_fallacies.append(f)
+                    graph_store.add_fallacy(f)
+                    if self._session_logger:
+                        self._session_logger.log_fallacy_added(
+                            fallacy_data=f.model_dump(mode="json"),
+                            source="skeptic_llm",
+                        )
             logger.info(f"LLM detection found {len(llm_fallacies)} additional fallacies")
         else:
             rule_based = self._detect_rule_based(graph_store)
@@ -79,10 +97,12 @@ class SkepticAgent:
             for f in rule_based:
                 if (f.claim_id, f.fallacy_type) not in existing:
                     all_fallacies.append(f)
-
-        # Add all fallacies to the graph store
-        for fallacy in all_fallacies:
-            graph_store.add_fallacy(fallacy)
+                    graph_store.add_fallacy(f)
+                    if self._session_logger:
+                        self._session_logger.log_fallacy_added(
+                            fallacy_data=f.model_dump(mode="json"),
+                            source="skeptic_rule_based",
+                        )
 
         logger.info(f"Total fallacies detected: {len(all_fallacies)}")
         for f in all_fallacies:
@@ -189,6 +209,7 @@ class SkepticAgent:
         claims_context = "\n".join(context_parts)
 
         try:
+            t0 = time.perf_counter()
             message = await asyncio.to_thread(
                 self.client.messages.create,
                 model=self.model,
@@ -204,9 +225,24 @@ class SkepticAgent:
                     }
                 ],
             )
-
+            duration = time.perf_counter() - t0
             response_text = message.content[0].text
             logger.debug(f"Skeptic LLM response:\n{response_text[:1000]}...")
+
+            if self._session_logger:
+                usage = None
+                if getattr(message, "usage", None):
+                    usage = {"input_tokens": getattr(message.usage, "input_tokens", None), "output_tokens": getattr(message.usage, "output_tokens", None)}
+                self._session_logger.log_llm_call(
+                    provider="anthropic",
+                    model=self.model,
+                    role="skeptic_fallacy_detection",
+                    system_prompt=SKEPTIC_SYSTEM_PROMPT,
+                    user_content=SKEPTIC_DETECTION_PROMPT.format(claims_context=claims_context),
+                    response_text=response_text,
+                    usage=usage,
+                    duration_seconds=round(duration, 3),
+                )
 
             json_str = self._extract_json(response_text)
             data = json.loads(json_str)

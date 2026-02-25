@@ -13,10 +13,11 @@ Falls back to rule-based extraction if the API is unavailable.
 
 import os
 import json
+import time
 import uuid
 import asyncio
 import logging
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 from api.models.schemas import (
     Claim,
@@ -38,6 +39,9 @@ from config.settings import (
     ONTOLOGICAL_EXTRACTION_PROMPT,
 )
 
+if TYPE_CHECKING:
+    from session_log.session_structured_logger import SessionLogger
+
 logger = logging.getLogger("debategraph.ontological")
 
 try:
@@ -54,9 +58,10 @@ class OntologicalAgent:
     from transcription segments. Processes in chunks for efficiency.
     """
 
-    def __init__(self):
+    def __init__(self, session_logger: Optional["SessionLogger"] = None):
         self.client = None
         self.model = LLM_MODEL
+        self._session_logger = session_logger
         if ANTHROPIC_AVAILABLE:
             api_key = os.getenv("ANTHROPIC_API_KEY", "")
             if api_key:
@@ -159,7 +164,9 @@ class OntologicalAgent:
         logger.info(f"[Chunk {chunk_idx}] Extracting claims from {len(segments)} segments...")
         logger.debug(f"[Chunk {chunk_idx}] Transcript:\n{transcript_text[:500]}...")
 
+        source_tag = f"ontological_chunk_{chunk_idx}"
         try:
+            t0 = time.perf_counter()
             message = await asyncio.to_thread(
                 self.client.messages.create,
                 model=self.model,
@@ -175,9 +182,25 @@ class OntologicalAgent:
                     }
                 ],
             )
-
+            duration = time.perf_counter() - t0
             response_text = message.content[0].text
             logger.debug(f"[Chunk {chunk_idx}] Raw LLM response:\n{response_text[:1000]}...")
+
+            if self._session_logger:
+                usage = None
+                if getattr(message, "usage", None):
+                    usage = {"input_tokens": getattr(message.usage, "input_tokens", None), "output_tokens": getattr(message.usage, "output_tokens", None)}
+                self._session_logger.log_llm_call(
+                    provider="anthropic",
+                    model=self.model,
+                    role="ontological_extraction",
+                    system_prompt=ONTOLOGICAL_SYSTEM_PROMPT,
+                    user_content=ONTOLOGICAL_EXTRACTION_PROMPT.format(transcription=transcript_text),
+                    response_text=response_text,
+                    usage=usage,
+                    duration_seconds=round(duration, 3),
+                    extra={"chunk_idx": chunk_idx},
+                )
 
             json_str = self._extract_json(response_text)
             data = json.loads(json_str)
@@ -203,6 +226,12 @@ class OntologicalAgent:
                         is_factual=claim_data.get("is_factual", False),
                     )
                     graph_store.add_claim(claim)
+                    if self._session_logger:
+                        self._session_logger.log_node_created(
+                            node_id=claim.id,
+                            claim_data=claim.model_dump(mode="json"),
+                            source=source_tag,
+                        )
                     claims_added += 1
                 except (ValueError, KeyError) as e:
                     logger.warning(f"[Chunk {chunk_idx}] Skipping invalid claim: {e}")
@@ -222,6 +251,14 @@ class OntologicalAgent:
                         confidence=rel_data.get("confidence", 0.7),
                     )
                     graph_store.add_relation(relation)
+                    if self._session_logger:
+                        self._session_logger.log_edge_created(
+                            source_id=source_id,
+                            target_id=target_id,
+                            relation_type=relation.relation_type.value,
+                            confidence=relation.confidence,
+                            source=source_tag,
+                        )
                     relations_added += 1
                 except (ValueError, KeyError) as e:
                     logger.warning(f"[Chunk {chunk_idx}] Skipping invalid relation: {e}")
@@ -271,12 +308,21 @@ class OntologicalAgent:
             # Link cross-speaker responses
             if prev.speaker != curr.speaker:
                 if curr.claim_type == ClaimType.REBUTTAL:
-                    graph_store.add_relation(ClaimRelation(
+                    rel = ClaimRelation(
                         source_id=curr.id,
                         target_id=prev.id,
                         relation_type=EdgeType.ATTACK,
                         confidence=0.6,
-                    ))
+                    )
+                    graph_store.add_relation(rel)
+                    if self._session_logger:
+                        self._session_logger.log_edge_created(
+                            source_id=rel.source_id,
+                            target_id=rel.target_id,
+                            relation_type=rel.relation_type.value,
+                            confidence=rel.confidence,
+                            source="cross_chunk_link",
+                        )
                     cross_links += 1
         
         if cross_links > 0:
@@ -298,6 +344,7 @@ class OntologicalAgent:
         chunk_idx: int,
     ) -> None:
         """Rule-based extraction for a list of segments."""
+        source_tag = f"rule_based_chunk_{chunk_idx}"
         claims = []
         for i, segment in enumerate(segments):
             claim_type = self._infer_claim_type(segment.text)
@@ -317,6 +364,12 @@ class OntologicalAgent:
             )
             claims.append(claim)
             graph_store.add_claim(claim)
+            if self._session_logger:
+                self._session_logger.log_node_created(
+                    node_id=claim.id,
+                    claim_data=claim.model_dump(mode="json"),
+                    source=source_tag,
+                )
 
         # Infer relations
         for i, claim in enumerate(claims):
@@ -325,26 +378,53 @@ class OntologicalAgent:
             prev = claims[i - 1]
             if claim.speaker != prev.speaker:
                 if claim.claim_type == ClaimType.REBUTTAL:
-                    graph_store.add_relation(ClaimRelation(
+                    rel = ClaimRelation(
                         source_id=claim.id,
                         target_id=prev.id,
                         relation_type=EdgeType.ATTACK,
                         confidence=0.65,
-                    ))
+                    )
+                    graph_store.add_relation(rel)
+                    if self._session_logger:
+                        self._session_logger.log_edge_created(
+                            source_id=rel.source_id,
+                            target_id=rel.target_id,
+                            relation_type=rel.relation_type.value,
+                            confidence=rel.confidence,
+                            source=source_tag,
+                        )
                 elif claim.claim_type == ClaimType.CONCESSION:
-                    graph_store.add_relation(ClaimRelation(
+                    rel = ClaimRelation(
                         source_id=claim.id,
                         target_id=prev.id,
                         relation_type=EdgeType.SUPPORT,
                         confidence=0.5,
-                    ))
+                    )
+                    graph_store.add_relation(rel)
+                    if self._session_logger:
+                        self._session_logger.log_edge_created(
+                            source_id=rel.source_id,
+                            target_id=rel.target_id,
+                            relation_type=rel.relation_type.value,
+                            confidence=rel.confidence,
+                            source=source_tag,
+                        )
             elif claim.claim_type == ClaimType.PREMISE and prev.claim_type == ClaimType.CONCLUSION:
-                graph_store.add_relation(ClaimRelation(
+                rel = ClaimRelation(
                     source_id=claim.id,
                     target_id=prev.id,
                     relation_type=EdgeType.SUPPORT,
                     confidence=0.6,
-                ))
+                )
+                graph_store.add_relation(rel)
+                if self._session_logger:
+                    self._session_logger.log_edge_created(
+                        source_id=rel.source_id,
+                        target_id=rel.target_id,
+                        relation_type=rel.relation_type.value,
+                        confidence=rel.confidence,
+                        source=source_tag,
+                    )
 
     def _infer_claim_type(self, text: str) -> ClaimType:
         """Infer claim type from text patterns."""

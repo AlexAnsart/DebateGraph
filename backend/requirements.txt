@@ -14,9 +14,13 @@ whisperx @ git+https://github.com/m-bain/whisperX.git
 
 # ─── LLM ────────────────────────────────────────────────────
 anthropic>=0.45.0
+openai>=1.0.0
 
 # ─── Graph ──────────────────────────────────────────────────
 networkx==3.3
+
+# ─── Database ───────────────────────────────────────────────
+psycopg2-binary>=2.9.9
 
 # ─── Message Broker ─────────────────────────────────────────
 redis==5.0.8
@@ -24,6 +28,10 @@ redis==5.0.8
 # ─── Utilities ──────────────────────────────────────────────
 aiofiles==24.1.0
 ffmpeg-python==0.2.0
+imageio-ffmpeg>=0.5.0  # Bundled ffmpeg when system ffmpeg is not installed (e.g. Windows)
+pydub>=0.25.1  # Audio chunking for long-file transcription (splits WAV/MP3 into segments)
+audioop-lts>=0.2.0; python_version >= "3.13"  # stdlib audioop was removed in 3.13; pydub needs it
+# WhisperX/pyannote work best with numpy 1.x. On Python 3.13 Windows there is no wheel → needs VS Build Tools. Use Python 3.12 for full stack without compiler.
 numpy==1.26.4
 
 # ─── Fact-checking (Phase 2) ────────────────────────────────

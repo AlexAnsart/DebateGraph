@@ -1,0 +1,17 @@
+# Minimal deps to run the backend (no WhisperX/sentence-transformers).
+# Use this on Windows without a C compiler or for quick start.
+# Full stack: pip install -r requirements.txt
+
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.9
+python-dotenv==1.0.1
+pydantic==2.9.0
+anthropic==0.34.0
+openai>=1.0.0
+networkx==3.3
+psycopg2-binary>=2.9.9
+redis==5.0.8
+aiofiles==24.1.0
+ffmpeg-python==0.2.0
+numpy>=2.0,<3

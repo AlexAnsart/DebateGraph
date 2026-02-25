@@ -4,13 +4,20 @@ Creates organized log files per session in the logs/ directory.
 
 Structure:
   logs/
-    session_<timestamp>/
-      pipeline.txt      — Main pipeline flow
-      transcription.txt — STT + diarization details
-      ontological.txt   — Claim extraction details
-      skeptic.txt       — Fallacy detection details
-      researcher.txt    — Fact-checking details
-      errors.txt        — All errors across agents
+    session_<YYYYmmdd_HHMMSS_ffffff>/
+      meta.json              — Session start/end times
+      pipeline.txt            — Main pipeline flow
+      transcription.txt      — STT + diarization details
+      ontological.txt        — Claim extraction details
+      skeptic.txt            — Fallacy detection details
+      researcher.txt         — Fact-checking details
+      errors.txt             — All errors across agents
+      llm_calls.jsonl        — Every LLM call (input/output, timestamps)
+      nodes.jsonl            — Every node (claim) created
+      edges.jsonl            — Every edge (relation) created
+      fallacies.jsonl        — Every fallacy annotation
+      factchecks.jsonl       — Every fact-check result
+      transcription_chunks.jsonl — STT chunk outputs
 """
 
 import os
@@ -23,22 +30,23 @@ from config.settings import LOG_DIR
 def setup_session_logging(session_id: str = None) -> str:
     """
     Set up structured logging for a new analysis session.
-    
+    Folder name is always a timestamp (YYYYmmdd_HHMMSS) for easy ordering.
+
     Args:
-        session_id: Optional session identifier. If None, uses timestamp.
-    
+        session_id: Optional; ignored for folder name (kept for API compatibility).
+
     Returns:
         Path to the session log directory.
     """
-    if session_id is None:
-        session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
-    session_dir = os.path.join(LOG_DIR, f"session_{session_id}")
+    now = datetime.now()
+    timestamp = now.strftime("%Y%m%d_%H%M%S") + "_" + str(now.microsecond).zfill(6)
+    session_dir = os.path.join(LOG_DIR, f"session_{timestamp}")
     Path(session_dir).mkdir(parents=True, exist_ok=True)
     
     # Define log files for each component
     log_files = {
         "debategraph": "pipeline.txt",
+        "debategraph.streaming": "streaming.txt",
         "debategraph.transcription": "transcription.txt",
         "debategraph.ontological": "ontological.txt",
         "debategraph.skeptic": "skeptic.txt",
